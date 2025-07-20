@@ -7,6 +7,10 @@ from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import Input, LSTM, Dense
 import datetime
 
+if st.experimental_get_query_params().get("ping") == ["1"]:
+    st.write("pong")
+    st.stop()
+
 st.set_page_config(page_title="Crypto Predictor", layout="centered")
 st.title("🔮 7-Day Crypto Price Predictor (LSTM)")
 
