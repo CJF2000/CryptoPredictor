@@ -23,10 +23,7 @@ hide_streamlit_style = """
 st.markdown(hide_streamlit_style, unsafe_allow_html=True)
 
 st.title("\ud83d\udd2e Crypto Forecast Bot")
-st.markdown("""
-> \u26a0\ufe0f **Disclaimer:** This tool is for educational/informational purposes only.  
-> It is not financial advice—use it to help confirm trends, not to predict the future.
-""")
+
 
 # Password protection
 password = st.text_input("Enter Access Password", type="password")
