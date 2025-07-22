@@ -7,42 +7,38 @@ from sklearn.preprocessing import MinMaxScaler
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import Input, LSTM, Dense
 
-# 🔒 Hide Streamlit UI elements: hamburger, footer, header, and floating 'Manage App'
+# 🔒 Hide Streamlit UI elements
+st.set_page_config(page_title="Crypto Forecast Bot", layout="centered")
 hide_streamlit_style = """
     <style>
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
     header {visibility: hidden;}
     .stDeployButton {display:none;}
-    .st-emotion-cache-19rxjzo {display: none;} /* Extra floating controls (Manage App) */
+    .st-emotion-cache-19rxjzo {display: none;}
     </style>
 """
 st.markdown(hide_streamlit_style, unsafe_allow_html=True)
 
-# ----------------------------- CONFIG -----------------------------
-st.set_page_config(page_title="Crypto Forecast Bot", layout="centered")
-
-# ----------------------------- INTRO -----------------------------
+# 🔐 Password Wall
 st.title("🔮 Crypto Forecast Bot")
 st.markdown("""
 Welcome to the 7-day **Crypto Price Predictor**.
 
-📈 Powered by LSTM neural networks  
-🔒 Access is **password-protected** — DM [@YourTelegram](https://t.me/YourTelegram) to get in.  
+📈 Powered by AI (LSTM neural networks)  
+🔒 Access is password-protected — DM [@YourTelegram](https://t.me/YourTelegram) to unlock.  
 💸 Suggested donation: **$10/month**
-
 """)
 
-# ----------------------------- PASSWORD WALL -----------------------------
 password = st.text_input("Enter Access Password", type="password")
-
-if password != "brickedalpha":  # <- Change this monthly
+if password != "brickedalpha":  # 🔑 Change this regularly
     st.warning("Access denied. DM @YourTelegram to get your password.")
     st.stop()
+st.success("✅ Access granted.")
 
-st.success("✅ Access granted. Welcome!")
-
-# ----------------------------- LSTM HELPERS -----------------------------
+# --------------------------------------
+# LSTM Forecasting Functions
+# --------------------------------------
 def calculate_vwap(df):
     return (df['Close'] * df['Volume']).cumsum() / df['Volume'].cumsum()
 
@@ -82,8 +78,24 @@ def predict_future(model, recent_input, scaler, steps=7):
     padded_preds = np.hstack([future_preds_scaled, np.zeros((steps, 1))])
     return scaler.inverse_transform(padded_preds)[:, :3]
 
-# ----------------------------- APP UI -----------------------------
+# --------------------------------------
+# User Input
+# --------------------------------------
+st.header("📊 Forecast Dashboard")
+
 coin = st.selectbox("🪙 Choose a coin", ['BTC-USD', 'ETH-USD', 'XRP-USD', 'SOL-USD'])
+
+# 🔄 Show current price with metric
+try:
+    current_data = yf.Ticker(coin).history(period="1d", interval="1m")
+    if not current_data.empty:
+        current_price = current_data["Close"].iloc[-1]
+        st.metric(label=f"💰 Current {coin} Price", value=f"${current_price:,.2f}")
+    else:
+        st.warning("Live price unavailable.")
+except Exception as e:
+    st.warning(f"Couldn't fetch price: {e}")
+
 forecast_days = st.slider("📆 Forecast Days", 1, 15, 7)
 
 if st.button("🚀 Run Forecast"):
@@ -98,15 +110,19 @@ if st.button("🚀 Run Forecast"):
             recent_scaled = scaler.transform(df_full[['Close', 'High', 'Low', 'VWAP']].iloc[-30:])
             preds = predict_future(model, recent_scaled, scaler, steps=forecast_days)
 
-            last_date = df.index[-1]
-            future_dates = [(last_date + datetime.timedelta(days=i)).strftime('%Y-%m-%d') for i in range(forecast_days)]
+            # Use today's date as the base for predictions
+            start_date = pd.to_datetime("today").normalize()
+            future_dates = [(start_date + datetime.timedelta(days=i)).strftime('%Y-%m-%d') for i in range(forecast_days)]
+            
             df_pred = pd.DataFrame(preds, columns=['Close', 'High', 'Low'])
             df_pred.insert(0, 'Date', future_dates)
 
-            st.success("📊 Forecast complete!")
+            st.success("📈 Forecast complete!")
             st.dataframe(df_pred)
             st.line_chart(df_pred.set_index("Date"))
 
             csv = df_pred.to_csv(index=False).encode("utf-8")
             st.download_button("📥 Download CSV", csv, f"{coin}_forecast.csv", "text/csv")
+
+
 
