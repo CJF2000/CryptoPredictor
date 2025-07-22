@@ -99,7 +99,7 @@ if st.button("🚀 Run Forecast"):
             preds = predict_future(model, recent_scaled, scaler, steps=forecast_days)
 
             last_date = df.index[-1]
-            future_dates = [(last_date + datetime.timedelta(days=i)).strftime('%Y-%m-%d') for i in range(1, forecast_days + 1)]
+            future_dates = [(last_date + datetime.timedelta(days=i)).strftime('%Y-%m-%d') for i in range(forecast_days)]
             df_pred = pd.DataFrame(preds, columns=['Close', 'High', 'Low'])
             df_pred.insert(0, 'Date', future_dates)
 
