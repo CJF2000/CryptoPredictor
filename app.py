@@ -23,6 +23,12 @@ st.markdown(hide_streamlit_style, unsafe_allow_html=True)
 # 🔐 Password Wall
 st.title("🔮 Crypto Forecast Bot")
 st.markdown("""
+> ⚠️ **Disclaimer:** This tool is for educational and informational purposes only.  
+> It is not financial advice and should not be used to make investment decisions.  
+> Use it to help spot trends — not to predict the future.
+""")
+
+st.markdown("""
 Welcome to the 7-day **Crypto Price Predictor**.
 
 📈 Powered by AI (LSTM neural networks)  
