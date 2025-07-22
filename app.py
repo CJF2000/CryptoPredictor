@@ -129,6 +129,19 @@ if st.button("🚀 Run Forecast"):
 
             csv = df_pred.to_csv(index=False).encode("utf-8")
             st.download_button("📥 Download CSV", csv, f"{coin}_forecast.csv", "text/csv")
+            
+st.markdown("---")
+st.markdown("### Terms of Use & Disclaimer")
+st.markdown("""
+This site is for **educational and informational purposes only**. The predictions generated are based on historical data and machine learning models and **should not be interpreted as financial advice or investment guidance**. We do not guarantee accuracy, reliability, or performance of any forecasts.
+
+You are solely responsible for any financial decisions you make. We are not registered financial advisors and do not offer personalized trading strategies.
+
+Any contributions or donations made are considered **voluntary support for continued development** and do not constitute a purchase of financial products or services.
+
+**Use at your own risk.**
+""")
+
 
 
 
