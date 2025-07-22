@@ -32,13 +32,13 @@ st.markdown("""
 Welcome to the 7-day **Crypto Price Predictor**.
 
 📈 Powered by AI (LSTM neural networks)  
-🔒 Access is password-protected — DM [@Big_C4N](https://t.me/Big_C4N) to unlock.  
+🔒 Access is password-protected — DM [@Forecast_Wizard](https://t.me/Forecast_Wizard) to unlock.  
 💸 **$10/month**
 """)
 
 password = st.text_input("Enter Access Password", type="password")
 if password != "crypto_prediction777":  # 🔑 Change this regularly
-    st.warning("Access denied. DM @Big_C4N to get your password.")
+    st.warning("Access denied. DM @Forecast_Wizard to get your password.")
     st.stop()
 st.success("✅ Access granted.")
 
