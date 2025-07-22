@@ -5,9 +5,12 @@ import yfinance as yf
 import datetime
 from sklearn.preprocessing import MinMaxScaler
 from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import Input, LSTM, Dense
+from tensorflow.keras.layers import Input, LSTM, Dense, Dropout
+import ta  # pip install ta
 
-# 🔒 Hide Streamlit UI elements
+# -----------------------------
+# Streamlit UI - Hide defaults & Setup page
+# -----------------------------
 st.set_page_config(page_title="Crypto Forecast Bot", layout="centered")
 hide_streamlit_style = """
     <style>
@@ -15,120 +18,108 @@ hide_streamlit_style = """
     footer {visibility: hidden;}
     header {visibility: hidden;}
     .stDeployButton {display:none;}
-    .st-emotion-cache-19rxjzo {display: none;}
     </style>
 """
 st.markdown(hide_streamlit_style, unsafe_allow_html=True)
 
-# 🔐 Password Wall
-st.title("🔮 Crypto Forecast Bot")
+st.title("\ud83d\udd2e Crypto Forecast Bot")
 st.markdown("""
-> ⚠️ **Disclaimer:** This tool is for educational and informational purposes only.  
-> It is not financial advice and should not be used to make investment decisions.  
-> Use it to help spot trends — not to predict the future.
+> \u26a0\ufe0f **Disclaimer:** This tool is for educational/informational purposes only.  
+> It is not financial advice—use it to help confirm trends, not to predict the future.
 """)
 
-st.markdown("""
-Welcome to the 7-day **Crypto Price Predictor**.
-
-📈 Powered by AI (LSTM neural networks)  
-🔒 Access is password-protected — DM [@Forecast_Wizard](https://t.me/Forecast_Wizard) to unlock.  
-💸 **$10/month**
-""")
-
+# Password protection
 password = st.text_input("Enter Access Password", type="password")
-if password != "crypto_prediction777":  # 🔑 Change this regularly
-    st.warning("Access denied. DM @Forecast_Wizard to get your password.")
+if password != "brickedalpha":
+    st.warning("Access denied. DM @Forecast_Wizard for the password.")
     st.stop()
-st.success("✅ Access granted.")
+st.success("\u2705 Access granted.")
 
-# --------------------------------------
-# LSTM Forecasting Functions
-# --------------------------------------
-def calculate_vwap(df):
-    return (df['Close'] * df['Volume']).cumsum() / df['Volume'].cumsum()
+# Configuration
+look_back = 30
+forecast_days = st.slider("Forecast Days", 1, 15, 7)
+coin = st.selectbox("\ud83e\ude99 Choose a coin", ['BTC-USD', 'ETH-USD', 'XRP-USD', 'SOL-USD'])
 
-def prepare_data(df, look_back=30):
-    df['VWAP'] = calculate_vwap(df)
-    df = df.dropna()
-    features = ['Close', 'High', 'Low', 'VWAP']
-    scaler = MinMaxScaler()
-    scaled_data = scaler.fit_transform(df[features])
-    X, y = [], []
-    for i in range(look_back, len(scaled_data)):
-        X.append(scaled_data[i - look_back:i])
-        y.append(scaled_data[i, :3])
-    return np.array(X), np.array(y), scaler, df
+# Data Preparation
 
-def build_model(input_shape):
+def prepare_data(df, look_back, forecast_days):
+    df['VWAP'] = (df['Close'] * df['Volume']).cumsum() / df['Volume'].cumsum()
+    df['MACD'] = ta.trend.macd(df['Close'])
+    df['RSI'] = ta.momentum.rsi(df['Close'])
+    df['ATR'] = ta.volatility.average_true_range(df['High'], df['Low'], df['Close'])
+    df['DayOfWeek'] = df.index.dayofweek
+
+    df.fillna(method='ffill', inplace=True)
+    df.dropna(inplace=True)
+
+    features = ['Close', 'High', 'Low', 'Volume', 'VWAP', 'MACD', 'RSI', 'ATR', 'DayOfWeek']
+    scaler_X = MinMaxScaler()
+    X_scaled = scaler_X.fit_transform(df[features])
+
+    scaler_y = MinMaxScaler()
+    y_scaled = scaler_y.fit_transform(df[['Close', 'High', 'Low']])
+
+    X_samples = []
+    y_samples = []
+    for i in range(look_back, len(df) - forecast_days + 1):
+        X_samples.append(X_scaled[i - look_back: i])
+        y_seq = y_scaled[i: i + forecast_days]
+        y_samples.append(y_seq.flatten())
+
+    return np.array(X_samples), np.array(y_samples), scaler_X, scaler_y, df
+
+# Model Builder
+
+def build_model(input_shape, output_units):
     model = Sequential([
         Input(shape=input_shape),
-        LSTM(64, return_sequences=True),
-        LSTM(32),
-        Dense(3)
+        LSTM(128, return_sequences=True),
+        Dropout(0.2),
+        LSTM(64),
+        Dropout(0.2),
+        Dense(output_units)
     ])
     model.compile(optimizer='adam', loss='mean_squared_error')
     return model
 
-def predict_future(model, recent_input, scaler, steps=7):
-    future_input = recent_input.copy()
-    future_preds_scaled = []
-    for _ in range(steps):
-        input_seq = future_input.reshape(1, 30, 4)
-        pred = model.predict(input_seq, verbose=0)[0]
-        future_preds_scaled.append(pred)
-        dummy_vwap = future_input[-1, 3]
-        next_input = np.append(pred, dummy_vwap).reshape(1, 4)
-        future_input = np.vstack([future_input[1:], next_input])
-    future_preds_scaled = np.array(future_preds_scaled)
-    padded_preds = np.hstack([future_preds_scaled, np.zeros((steps, 1))])
-    return scaler.inverse_transform(padded_preds)[:, :3]
+# Prediction
 
-# --------------------------------------
-# User Input
-# --------------------------------------
-st.header("📊 Forecast Dashboard")
+def make_forecast(model, X_input, scaler_y, forecast_days):
+    pred_vector = model.predict(np.expand_dims(X_input, axis=0), verbose=0)[0]
+    pred_scaled = pred_vector.reshape(forecast_days, 3)
+    predictions = scaler_y.inverse_transform(pred_scaled)
+    df_pred = pd.DataFrame(predictions, columns=['Close', 'High', 'Low'])
+    df_pred['High'] = df_pred[['Close', 'High']].max(axis=1)
+    df_pred['Low'] = df_pred[['Close', 'Low']].min(axis=1)
+    df_pred['Low'] = df_pred['Low'].clip(lower=0)
+    return df_pred
 
-coin = st.selectbox("🪙 Choose a coin", ['BTC-USD', 'ETH-USD', 'XRP-USD', 'SOL-USD'])
+# Forecast Trigger
 
-# 🔄 Show current price with metric
-try:
-    current_data = yf.Ticker(coin).history(period="1d", interval="1m")
-    if not current_data.empty:
-        current_price = current_data["Close"].iloc[-1]
-        st.metric(label=f"💰 Current {coin} Price", value=f"${current_price:,.2f}")
-    else:
-        st.warning("Live price unavailable.")
-except Exception as e:
-    st.warning(f"Couldn't fetch price: {e}")
-
-forecast_days = st.slider("📆 Forecast Days", 1, 15, 7)
-
-if st.button("🚀 Run Forecast"):
-    with st.spinner(f"Fetching and training {coin}..."):
+if st.button("\ud83d\ude80 Run Forecast"):
+    with st.spinner(f"Fetching data and training model for {coin}..."):
         df = yf.download(coin, start="2014-01-01", end=datetime.datetime.now())
         if df.shape[0] < 100:
-            st.error("⚠️ Not enough data to evaluate.")
+            st.error("\u26a0\ufe0f Not enough data to evaluate.")
         else:
-            X, y, scaler, df_full = prepare_data(df)
-            model = build_model((X.shape[1], X.shape[2]))
-            model.fit(X, y, epochs=10, batch_size=32, verbose=0)
-            recent_scaled = scaler.transform(df_full[['Close', 'High', 'Low', 'VWAP']].iloc[-30:])
-            preds = predict_future(model, recent_scaled, scaler, steps=forecast_days)
+            X, y, scaler_X, scaler_y, df_full = prepare_data(df, look_back, forecast_days)
+            X_recent = scaler_X.transform(df_full.iloc[-look_back:][['Close', 'High', 'Low', 'Volume', 'VWAP', 'MACD', 'RSI', 'ATR', 'DayOfWeek']])
+            num_features = X.shape[2]
+            output_units = forecast_days * 3
+            model = build_model((look_back, num_features), output_units)
+            model.fit(X, y, epochs=20, batch_size=32, verbose=0)
+            df_pred = make_forecast(model, X_recent, scaler_y, forecast_days)
 
-            # Use today's date as the base for predictions
             start_date = pd.to_datetime("today").normalize()
             future_dates = [(start_date + datetime.timedelta(days=i)).strftime('%Y-%m-%d') for i in range(forecast_days)]
-            
-            df_pred = pd.DataFrame(preds, columns=['Close', 'High', 'Low'])
             df_pred.insert(0, 'Date', future_dates)
 
-            st.success("📈 Forecast complete!")
+            st.success("\ud83d\udcc8 Forecast complete!")
             st.dataframe(df_pred)
             st.line_chart(df_pred.set_index("Date"))
 
             csv = df_pred.to_csv(index=False).encode("utf-8")
-            st.download_button("📥 Download CSV", csv, f"{coin}_forecast.csv", "text/csv")
+            st.download_button("\ud83d\udcc5 Download CSV", csv, f"{coin}_forecast.csv", "text/csv")
             
 st.markdown("---")
 st.markdown("### Terms of Use & Disclaimer")
