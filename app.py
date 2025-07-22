@@ -7,12 +7,14 @@ from sklearn.preprocessing import MinMaxScaler
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import Input, LSTM, Dense
 
-# Hide the Streamlit default menu and footer
+# 🔒 Hide Streamlit UI elements: hamburger, footer, header, and floating 'Manage App'
 hide_streamlit_style = """
     <style>
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
     header {visibility: hidden;}
+    .stDeployButton {display:none;}
+    .st-emotion-cache-19rxjzo {display: none;} /* Extra floating controls (Manage App) */
     </style>
 """
 st.markdown(hide_streamlit_style, unsafe_allow_html=True)
