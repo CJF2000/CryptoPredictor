@@ -22,20 +22,23 @@ hide_streamlit_style = """
 """
 st.markdown(hide_streamlit_style, unsafe_allow_html=True)
 
-st.title("\ud83d\udd2e Crypto Forecast Bot")
-
+st.title("Crypto Forecast Bot")
+st.markdown("""
+> ⚠️ **Disclaimer:** This tool is for educational/informational purposes only.  
+> It is not financial advice—use it to help confirm trends, not to predict the future.
+""")
 
 # Password protection
 password = st.text_input("Enter Access Password", type="password")
 if password != "brickedalpha":
     st.warning("Access denied. DM @Forecast_Wizard for the password.")
     st.stop()
-st.success("\u2705 Access granted.")
+st.success("✅ Access granted.")
 
 # Configuration
 look_back = 30
 forecast_days = st.slider("Forecast Days", 1, 15, 7)
-coin = st.selectbox("\ud83e\ude99 Choose a coin", ['BTC-USD', 'ETH-USD', 'XRP-USD', 'SOL-USD'])
+coin = st.selectbox("Choose a coin", ['BTC-USD', 'ETH-USD', 'XRP-USD', 'SOL-USD'])
 
 # Data Preparation
 
@@ -93,11 +96,11 @@ def make_forecast(model, X_input, scaler_y, forecast_days):
 
 # Forecast Trigger
 
-if st.button("\ud83d\ude80 Run Forecast"):
+if st.button("Run Forecast"):
     with st.spinner(f"Fetching data and training model for {coin}..."):
         df = yf.download(coin, start="2014-01-01", end=datetime.datetime.now())
         if df.shape[0] < 100:
-            st.error("\u26a0\ufe0f Not enough data to evaluate.")
+            st.error("⚠️ Not enough data to evaluate.")
         else:
             X, y, scaler_X, scaler_y, df_full = prepare_data(df, look_back, forecast_days)
             X_recent = scaler_X.transform(df_full.iloc[-look_back:][['Close', 'High', 'Low', 'Volume', 'VWAP', 'MACD', 'RSI', 'ATR', 'DayOfWeek']])
@@ -111,13 +114,13 @@ if st.button("\ud83d\ude80 Run Forecast"):
             future_dates = [(start_date + datetime.timedelta(days=i)).strftime('%Y-%m-%d') for i in range(forecast_days)]
             df_pred.insert(0, 'Date', future_dates)
 
-            st.success("\ud83d\udcc8 Forecast complete!")
+            st.success("Forecast complete!")
             st.dataframe(df_pred)
             st.line_chart(df_pred.set_index("Date"))
 
             csv = df_pred.to_csv(index=False).encode("utf-8")
-            st.download_button("\ud83d\udcc5 Download CSV", csv, f"{coin}_forecast.csv", "text/csv")
-            
+            st.download_button("Download CSV", csv, f"{coin}_forecast.csv", "text/csv")
+
 st.markdown("---")
 st.markdown("### Terms of Use & Disclaimer")
 st.markdown("""
