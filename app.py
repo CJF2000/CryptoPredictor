@@ -45,20 +45,20 @@ forecast_days = st.slider("Forecast Days", 1, 15, 7)
 coin = st.selectbox("Choose a coin", ['BTC-USD', 'ETH-USD', 'XRP-USD', 'SOL-USD'])
 
 # -----------------------------
-# Data Preparation (CLEAN)
+# Data Preparation (final fixed)
 # -----------------------------
 def prepare_data(df, look_back=30, forecast_days=7):
     df.index = pd.to_datetime(df.index)
 
-    # Indicators (flattened)
+    # --- Indicators (using raw internal arrays to avoid shape errors) ---
     macd = MACD(close=df['Close'])
-    df['MACD'] = macd.macd().values.flatten()
+    df['MACD'] = macd._macd.flatten()
 
     rsi = RSIIndicator(close=df['Close'])
-    df['RSI'] = rsi.rsi().values.flatten()
+    df['RSI'] = rsi._rsi.flatten()
 
     atr = AverageTrueRange(high=df['High'], low=df['Low'], close=df['Close'])
-    df['ATR'] = atr.average_true_range().values.flatten()
+    df['ATR'] = atr._atr.flatten()
 
     df['VWAP'] = (df['Close'] * df['Volume']).cumsum() / df['Volume'].cumsum()
     df['DayOfWeek'] = df.index.dayofweek
@@ -150,6 +150,4 @@ Any contributions or donations made are considered **voluntary support for conti
 
 **Use at your own risk.**
 """)
-
-
 
