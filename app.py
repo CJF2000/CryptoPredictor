@@ -4,10 +4,12 @@ import pandas as pd
 import yfinance as yf
 import datetime
 from sklearn.preprocessing import MinMaxScaler
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import mean_absolute_error
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import Input, LSTM, Dense, Dropout
+import xgboost as xgb
 
-# 🔒 Hide Streamlit UI elements
 st.set_page_config(page_title="Crypto Forecast Bot", layout="centered")
 hide_streamlit_style = """
     <style>
@@ -20,7 +22,6 @@ hide_streamlit_style = """
 """
 st.markdown(hide_streamlit_style, unsafe_allow_html=True)
 
-# 🔐 Password Wall
 st.title("Crypto Forecast Bot")
 st.markdown("""
 > ⚠️ **Disclaimer:** This tool is for educational and informational purposes only.  
@@ -31,8 +32,8 @@ st.markdown("""
 st.markdown("""
 Welcome to the 7-day **Crypto Price Predictor**.
 
-📈 Powered by AI (LSTM neural networks)  
-🔒 Access is password-protected — DM [@Forest_Wizard](https://t.me/Forecast_Wizard) on Telegram or Discord to unlock.  
+📈 Powered by AI (LSTM neural networks + XGBoost ensemble)  
+🔐 Access is password-protected — DM [@Forest_Wizard](https://t.me/Forecast_Wizard) on Telegram or Discord to unlock.  
 💸 Suggested donation: **$10/month or 50 for lifetime access**   
 Cashapp: ForecastWizard  
 Venmo: Forecast_Wizard   
@@ -45,9 +46,7 @@ if password != "brickedalpha":
     st.stop()
 st.success("✅ Access granted.")
 
-# --------------------------------------
-# LSTM Forecasting Functions
-# --------------------------------------
+# ------------------ Core Functions ------------------
 def calculate_vwap(df):
     return (df['Close'] * df['Volume']).cumsum() / df['Volume'].cumsum()
 
@@ -74,23 +73,25 @@ def prepare_data(df, look_back=30):
     df['ATR'] = df['TR'].rolling(window=14).mean()
     df['OBV'] = (np.sign(df['Close'].diff()) * df['Volume']).fillna(0).cumsum()
     df['Return'] = df['Close'].pct_change()
-
     df = df.dropna()
 
-    features = [
-        'Close', 'High', 'Low', 'VWAP', 'MACD', 'RSI',
-        'Upper_BB', 'Lower_BB', 'ATR', 'OBV', 'Return'
-    ]
-
+    features = ['Close', 'High', 'Low', 'VWAP', 'MACD', 'RSI',
+                'Upper_BB', 'Lower_BB', 'ATR', 'OBV', 'Return']
     scaler = MinMaxScaler()
     scaled = scaler.fit_transform(df[features])
-    X, y = [], []
-    for i in range(look_back, len(scaled)):
-        X.append(scaled[i - look_back:i])
-        y.append(scaled[i, :3])  # scaled Close, High, Low
-    return np.array(X), np.array(y), scaler, df
 
-def build_model(input_shape):
+    X_lstm, y_lstm = [], []
+    for i in range(look_back, len(scaled)):
+        X_lstm.append(scaled[i - look_back:i])
+        y_lstm.append(scaled[i, :3])
+
+    # For XGBoost, flatten the input
+    X_xgb = [scaled[i - look_back:i].flatten() for i in range(look_back, len(scaled))]
+    y_xgb = [scaled[i, :3] for i in range(look_back, len(scaled))]
+
+    return np.array(X_lstm), np.array(y_lstm), np.array(X_xgb), np.array(y_xgb), scaler, df
+
+def build_lstm(input_shape):
     model = Sequential([
         Input(shape=input_shape),
         LSTM(64, return_sequences=True),
@@ -102,31 +103,25 @@ def build_model(input_shape):
     model.compile(optimizer='adam', loss='mae')
     return model
 
-def predict_future(model, recent_input, scaler, steps=7):
+def predict_lstm(model, recent_input, scaler, steps=7):
     future_input = recent_input.copy()
     future_preds_scaled = []
     for _ in range(steps):
         input_seq = future_input.reshape(1, 30, future_input.shape[1])
         pred_scaled = model.predict(input_seq, verbose=0)[0]
         future_preds_scaled.append(pred_scaled)
-
         last_features = future_input[-1, 3:].copy()
         next_input = np.append(pred_scaled, last_features).reshape(1, -1)
         future_input = np.vstack([future_input[1:], next_input])
 
-    # Inverse transform: pad with zeros to match original scaler shape
-    future_preds_scaled = np.array(future_preds_scaled)
     padded = np.hstack([future_preds_scaled, np.zeros((steps, future_input.shape[1] - 3))])
     preds_unscaled = scaler.inverse_transform(padded)[:, :3]
     return preds_unscaled
 
-# --------------------------------------
-# User Input
-# --------------------------------------
+# ------------------ UI ------------------
 st.header("📊 Forecast Dashboard")
 
 coin = st.selectbox("🪙 Choose a coin", ['BTC-USD', 'ETH-USD', 'XRP-USD', 'SOL-USD'])
-
 try:
     current_data = yf.Ticker(coin).history(period="1d", interval="1m")
     if not current_data.empty:
@@ -137,7 +132,7 @@ try:
 except Exception as e:
     st.warning(f"Couldn't fetch price: {e}")
 
-forecast_days = st.slider("📆 Forecast Days", 1, 15, 7)
+forecast_days = st.slider("🗖️ Forecast Days", 1, 15, 7)
 
 if st.button("🚀 Run Forecast"):
     with st.spinner(f"Fetching and training {coin}..."):
@@ -145,28 +140,40 @@ if st.button("🚀 Run Forecast"):
         if df.shape[0] < 100:
             st.error("⚠️ Not enough data to evaluate.")
         else:
-            X, y, scaler, df_full = prepare_data(df)
-            model = build_model((X.shape[1], X.shape[2]))
-            model.fit(X, y, epochs=10, batch_size=32, verbose=0)
-            recent_scaled = scaler.transform(df_full[[
-                'Close', 'High', 'Low', 'VWAP', 'MACD', 'RSI',
-                'Upper_BB', 'Lower_BB', 'ATR', 'OBV', 'Return'
-            ]].iloc[-30:])
-            preds = predict_future(model, recent_scaled, scaler, steps=forecast_days)
+            X_lstm, y_lstm, X_xgb, y_xgb, scaler, df_full = prepare_data(df)
 
-            # ✅ Forecast starts today, not tomorrow
+            # Train LSTM
+            lstm_model = build_lstm((X_lstm.shape[1], X_lstm.shape[2]))
+            lstm_model.fit(X_lstm, y_lstm, epochs=10, batch_size=32, verbose=0)
+            recent_lstm = scaler.transform(df_full.iloc[-30:][['Close', 'High', 'Low', 'VWAP', 'MACD', 'RSI',
+                                                              'Upper_BB', 'Lower_BB', 'ATR', 'OBV', 'Return']])
+            preds_lstm = predict_lstm(lstm_model, recent_lstm, scaler, steps=forecast_days)
+
+            # Train XGBoost
+            xgb_model = xgb.XGBRegressor()
+            X_train, X_test, y_train, y_test = train_test_split(X_xgb, y_xgb[:, 0], test_size=0.2, shuffle=False)
+            xgb_model.fit(X_train, y_train)
+            xgb_recent_input = X_xgb[-1].reshape(1, -1)
+            preds_xgb_scaled = [xgb_model.predict(xgb_recent_input)[0]] * forecast_days
+            padded = np.hstack([np.array(preds_xgb_scaled).reshape(-1, 1), np.zeros((forecast_days, recent_lstm.shape[1] - 1))])
+            preds_xgb = scaler.inverse_transform(padded)[:, 0]
+
             start_date = datetime.datetime.now().date()
             future_dates = [(start_date + datetime.timedelta(days=i)).strftime('%Y-%m-%d') for i in range(forecast_days)]
-            
-            df_pred = pd.DataFrame(preds, columns=['Close', 'High', 'Low'])
-            df_pred.insert(0, 'Date', future_dates)
+
+            df_pred = pd.DataFrame({
+                'Date': future_dates,
+                'Close_LSTM': preds_lstm[:, 0],
+                'Close_XGB': preds_xgb,
+                'Blended_Close': (preds_lstm[:, 0] + preds_xgb) / 2
+            })
 
             st.success("📈 Forecast complete!")
             st.dataframe(df_pred)
-            st.line_chart(df_pred.set_index("Date"))
+            st.line_chart(df_pred.set_index("Date")[["Blended_Close"]])
 
             csv = df_pred.to_csv(index=False).encode("utf-8")
-            st.download_button("📥 Download CSV", csv, f"{coin}_forecast.csv", "text/csv")
+            st.download_button("📅 Download CSV", csv, f"{coin}_forecast.csv", "text/csv")
 
 st.markdown("---")
 st.markdown("### Terms of Use & Disclaimer")
@@ -179,3 +186,4 @@ Any contributions or donations made are considered **voluntary support for conti
 
 **Use at your own risk.**
 """)
+
