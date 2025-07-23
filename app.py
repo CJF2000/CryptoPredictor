@@ -26,7 +26,7 @@ st.markdown("""
 Welcome to the 7-day **Crypto Price Predictor**.
 
 📈 Powered by AI (LSTM neural networks)  
-🔒 Access is password-protected — DM [@YourTelegram](https://t.me/YourTelegram) to unlock.  
+🔒 Access is password-protected — DM [@Forest_Wizard](https://t.me/Forecast_Wizard) to unlock.  
 💸 Suggested donation: **$10/month**
 """)
 
