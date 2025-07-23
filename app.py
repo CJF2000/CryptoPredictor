@@ -38,7 +38,7 @@ Welcome to the 7-day **Crypto Price Predictor**.
 
 password = st.text_input("Enter Access Password", type="password")
 if password != "brickedalpha":
-    st.warning("Access denied. DM @YourTelegram to get your password.")
+    st.warning("Access denied. DM @Forest_Wizard to get your password.")
     st.stop()
 st.success("✅ Access granted.")
 
