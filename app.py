@@ -43,10 +43,13 @@ coin = st.selectbox("Choose a coin", ['BTC-USD', 'ETH-USD', 'XRP-USD', 'SOL-USD'
 # Data Preparation
 
 def prepare_data(df, look_back, forecast_days):
-    df['VWAP'] = (df['Close'] * df['Volume']).cumsum() / df['Volume'].cumsum()
-    df['MACD'] = ta.trend.macd(df['Close'])
+    df.index = pd.to_datetime(df.index)
+
+    macd_obj = ta.trend.MACD(df['Close'])
+    df['MACD'] = macd_obj.macd()
     df['RSI'] = ta.momentum.rsi(df['Close'])
     df['ATR'] = ta.volatility.average_true_range(df['High'], df['Low'], df['Close'])
+    df['VWAP'] = (df['Close'] * df['Volume']).cumsum() / df['Volume'].cumsum()
     df['DayOfWeek'] = df.index.dayofweek
 
     df.fillna(method='ffill', inplace=True)
@@ -132,7 +135,6 @@ Any contributions or donations made are considered **voluntary support for conti
 
 **Use at your own risk.**
 """)
-
 
 
 
