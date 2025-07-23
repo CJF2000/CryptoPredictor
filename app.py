@@ -176,7 +176,3 @@ Any contributions or donations made are considered **voluntary support for conti
 **Use at your own risk.**
 """)
 
-
-**Use at your own risk.**
-""")
-
