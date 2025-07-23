@@ -45,12 +45,12 @@ forecast_days = st.slider("Forecast Days", 1, 15, 7)
 coin = st.selectbox("Choose a coin", ['BTC-USD', 'ETH-USD', 'XRP-USD', 'SOL-USD'])
 
 # -----------------------------
-# Data Preparation
+# Data Preparation (CLEAN)
 # -----------------------------
-def prepare_data(df, look_back, forecast_days):
+def prepare_data(df, look_back=30, forecast_days=7):
     df.index = pd.to_datetime(df.index)
 
-    # --- Indicators (flattened output) ---
+    # Indicators (flattened)
     macd = MACD(close=df['Close'])
     df['MACD'] = macd.macd().values.flatten()
 
@@ -63,8 +63,7 @@ def prepare_data(df, look_back, forecast_days):
     df['VWAP'] = (df['Close'] * df['Volume']).cumsum() / df['Volume'].cumsum()
     df['DayOfWeek'] = df.index.dayofweek
 
-    df.fillna(method='ffill', inplace=True)
-    df.dropna(inplace=True)
+    df = df.dropna()
 
     features = ['Close', 'High', 'Low', 'Volume', 'VWAP', 'MACD', 'RSI', 'ATR', 'DayOfWeek']
     scaler_X = MinMaxScaler()
@@ -73,14 +72,13 @@ def prepare_data(df, look_back, forecast_days):
     scaler_y = MinMaxScaler()
     y_scaled = scaler_y.fit_transform(df[['Close', 'High', 'Low']])
 
-    X_samples = []
-    y_samples = []
+    X, y = [], []
     for i in range(look_back, len(df) - forecast_days + 1):
-        X_samples.append(X_scaled[i - look_back: i])
+        X.append(X_scaled[i - look_back:i])
         y_seq = y_scaled[i: i + forecast_days]
-        y_samples.append(y_seq.flatten())
+        y.append(y_seq.flatten())
 
-    return np.array(X_samples), np.array(y_samples), scaler_X, scaler_y, df
+    return np.array(X), np.array(y), scaler_X, scaler_y, df
 
 # -----------------------------
 # Model Builder
@@ -152,5 +150,6 @@ Any contributions or donations made are considered **voluntary support for conti
 
 **Use at your own risk.**
 """)
+
 
 
