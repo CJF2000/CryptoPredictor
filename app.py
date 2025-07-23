@@ -45,10 +45,12 @@ coin = st.selectbox("Choose a coin", ['BTC-USD', 'ETH-USD', 'XRP-USD', 'SOL-USD'
 def prepare_data(df, look_back, forecast_days):
     df.index = pd.to_datetime(df.index)
 
-    macd_obj = ta.trend.MACD(df['Close'])
+    # Proper usage of TA indicators
+    macd_obj = ta.trend.MACD(close=df['Close'])
     df['MACD'] = macd_obj.macd()
-    df['RSI'] = ta.momentum.rsi(df['Close'])
-    df['ATR'] = ta.volatility.average_true_range(df['High'], df['Low'], df['Close'])
+
+    df['RSI'] = ta.momentum.RSIIndicator(close=df['Close']).rsi()
+    df['ATR'] = ta.volatility.AverageTrueRange(high=df['High'], low=df['Low'], close=df['Close']).average_true_range()
     df['VWAP'] = (df['Close'] * df['Volume']).cumsum() / df['Volume'].cumsum()
     df['DayOfWeek'] = df.index.dayofweek
 
