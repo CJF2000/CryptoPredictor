@@ -1,15 +1,15 @@
+# app.py
+
 import streamlit as st
 import numpy as np
 import pandas as pd
 import yfinance as yf
 import datetime
-from sklearn.preprocessing import MinMaxScaler
-from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import Input, LSTM, Dense
+import os
+from train_daily import train_and_save_forecast  # manual retrain access
 
-# 🔒 Hide Streamlit UI elements
 st.set_page_config(page_title="Crypto Forecast Bot", layout="centered")
-hide_streamlit_style = """
+st.markdown("""
     <style>
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
@@ -17,81 +17,33 @@ hide_streamlit_style = """
     .stDeployButton {display:none;}
     .st-emotion-cache-19rxjzo {display: none;}
     </style>
-"""
-st.markdown(hide_streamlit_style, unsafe_allow_html=True)
+""", unsafe_allow_html=True)
 
-# 🔐 Password Wall
 st.title("🔮 Crypto Forecast Bot")
 st.markdown("""
 > ⚠️ **Disclaimer:** This tool is for educational and informational purposes only.
 > It is not financial advice and should not be used to make investment decisions.
-> Use it to help spot trends — not to predict the future.
 """)
 
 st.markdown("""
 Welcome to the 7-day **Crypto Price Predictor**.
 
-📈 Powered by AI (LSTM neural networks)
-🔒 Access is password-protected — DM [@Forecast_Wizard](https://t.me/Forecast_Wizard) to unlock.
+📈 Powered by AI (LSTM neural networks)  
+🔒 Access is password-protected — DM [@Forecast_Wizard](https://t.me/Forecast_Wizard) to unlock.  
 💸  **$10/month or 50 for lifetime access**
 """)
 
 password = st.text_input("Enter Access Password", type="password")
-if password != "Crypto_Forecast777":  # 🔑 Change this regularly
+if password != "Crypto_Forecast777":
     st.warning("Access denied. DM @Forecast_Wizard on Telegram to get your password.")
     st.stop()
 st.success("✅ Access granted.")
 
-# --------------------------------------
-# LSTM Forecasting Functions
-# --------------------------------------
-def calculate_vwap(df):
-    return (df['Close'] * df['Volume']).cumsum() / df['Volume'].cumsum()
-
-def prepare_data(df, look_back=30):
-    df['VWAP'] = calculate_vwap(df)
-    df = df.dropna()
-    features = ['Close', 'High', 'Low', 'VWAP']
-    scaler = MinMaxScaler()
-    scaled_data = scaler.fit_transform(df[features])
-    X, y = [], []
-    for i in range(look_back, len(scaled_data)):
-        X.append(scaled_data[i - look_back:i])
-        y.append(scaled_data[i, :3])
-    return np.array(X), np.array(y), scaler, df
-
-def build_model(input_shape):
-    model = Sequential([
-        Input(shape=input_shape),
-        LSTM(64, return_sequences=True),
-        LSTM(32),
-        Dense(3)
-    ])
-    model.compile(optimizer='adam', loss='mean_squared_error')
-    return model
-
-def predict_future(model, recent_input, scaler, steps=7):
-    future_input = recent_input.copy()
-    future_preds_scaled = []
-    for _ in range(steps):
-        input_seq = future_input.reshape(1, 30, 4)
-        pred = model.predict(input_seq, verbose=0)[0]
-        future_preds_scaled.append(pred)
-        dummy_vwap = future_input[-1, 3]
-        next_input = np.append(pred, dummy_vwap).reshape(1, 4)
-        future_input = np.vstack([future_input[1:], next_input])
-    future_preds_scaled = np.array(future_preds_scaled)
-    padded_preds = np.hstack([future_preds_scaled, np.zeros((steps, 1))])
-    return scaler.inverse_transform(padded_preds)[:, :3]
-
-# --------------------------------------
-# User Input
-# --------------------------------------
 st.header("📊 Forecast Dashboard")
 
 coin = st.selectbox("🪙 Choose a coin", ['BTC-USD', 'ETH-USD', 'XRP-USD', 'SOL-USD'])
 
-# 🔄 Show current price with metric
+# Show current price
 try:
     current_data = yf.Ticker(coin).history(period="1d", interval="1m")
     if not current_data.empty:
@@ -104,40 +56,33 @@ except Exception as e:
 
 forecast_days = st.slider("📆 Forecast Days", 1, 15, 7)
 
-if st.button("🚀 Run Forecast"):
-    with st.spinner(f"Fetching and training {coin}..."):
-        df = yf.download(coin, start="2014-01-01", end=datetime.datetime.now())
-        if df.shape[0] < 100:
-            st.error("⚠️ Not enough data to evaluate.")
-        else:
-            X, y, scaler, df_full = prepare_data(df)
-            model = build_model((X.shape[1], X.shape[2]))
-            model.fit(X, y, epochs=10, batch_size=32, verbose=0)
-            recent_scaled = scaler.transform(df_full[['Close', 'High', 'Low', 'VWAP']].iloc[-30:])
-            preds = predict_future(model, recent_scaled, scaler, steps=forecast_days)
+if st.button("🚀 Load Forecast"):
+    path = f"daily_forecasts/{coin}_forecast.csv"
+    if os.path.exists(path):
+        df_pred = pd.read_csv(path)
+        df_pred = df_pred.head(forecast_days)
+        st.success("📈 Forecast loaded!")
+        st.dataframe(df_pred)
+        st.line_chart(df_pred.set_index("Date"))
+        csv = df_pred.to_csv(index=False).encode("utf-8")
+        st.download_button("📥 Download CSV", csv, f"{coin}_forecast.csv", "text/csv")
+    else:
+        st.error("❌ Forecast not available. Try again later.")
 
-            # Use today's date as the base for predictions
-            start_date = pd.to_datetime("today").normalize()
-            future_dates = [(start_date + datetime.timedelta(days=i)).strftime('%Y-%m-%d') for i in range(forecast_days)]
-
-            df_pred = pd.DataFrame(preds, columns=['Close', 'High', 'Low'])
-            df_pred.insert(0, 'Date', future_dates)
-
-            st.success("📈 Forecast complete!")
+if st.button("🔁 Manually Retrain This Coin"):
+    with st.spinner(f"Training new model for {coin}..."):
+        try:
+            train_and_save_forecast(coin, forecast_days=forecast_days, epochs=150)
+            df_pred = pd.read_csv(f"daily_forecasts/{coin}_forecast.csv").head(forecast_days)
+            st.success("✅ Manual training complete!")
             st.dataframe(df_pred)
             st.line_chart(df_pred.set_index("Date"))
-
-            csv = df_pred.to_csv(index=False).encode("utf-8")
-            st.download_button("📥 Download CSV", csv, f"{coin}_forecast.csv", "text/csv")
+        except Exception as e:
+            st.error(f"🚨 Manual training failed: {e}")
 
 st.markdown("---")
 st.markdown("### Terms of Use & Disclaimer")
 st.markdown("""
-This site is for **educational and informational purposes only**. The predictions generated are based on historical data and machine learning models and **should not be interpreted as financial advice or investment guidance**. We do not guarantee accuracy, reliability, or performance of any forecasts.
-
-You are solely responsible for any financial decisions you make. We are not registered financial advisors and do not offer personalized trading strategies.
-
-Any contributions or donations made are considered **voluntary support for continued development** and do not constitute a purchase of financial products or services.
-
-**Use at your own risk.**
+This site is for **educational and informational purposes only**. The predictions generated are based on historical data and machine learning models and **should not be interpreted as financial advice or investment guidance**. Use at your own risk.
 """)
+
