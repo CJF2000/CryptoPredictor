@@ -6,7 +6,11 @@ import datetime
 from sklearn.preprocessing import MinMaxScaler
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import Input, LSTM, Dense, Dropout
-import ta  # pip install ta
+
+# Technical analysis
+from ta.trend import MACD
+from ta.momentum import RSIIndicator
+from ta.volatility import AverageTrueRange
 
 # -----------------------------
 # Streamlit UI - Hide defaults & Setup page
@@ -40,23 +44,30 @@ look_back = 30
 forecast_days = st.slider("Forecast Days", 1, 15, 7)
 coin = st.selectbox("Choose a coin", ['BTC-USD', 'ETH-USD', 'XRP-USD', 'SOL-USD'])
 
+# -----------------------------
 # Data Preparation
-
+# -----------------------------
 def prepare_data(df, look_back, forecast_days):
     df.index = pd.to_datetime(df.index)
 
-    # Proper usage of TA indicators
-    macd_obj = ta.trend.MACD(close=df['Close'])
-    df['MACD'] = macd_obj.macd()
+    # --- Indicators (all class-based format) ---
+    macd = MACD(close=df['Close'])
+    df['MACD'] = macd.macd()
 
-    df['RSI'] = ta.momentum.RSIIndicator(close=df['Close']).rsi()
-    df['ATR'] = ta.volatility.AverageTrueRange(high=df['High'], low=df['Low'], close=df['Close']).average_true_range()
+    rsi = RSIIndicator(close=df['Close'])
+    df['RSI'] = rsi.rsi()
+
+    atr = AverageTrueRange(high=df['High'], low=df['Low'], close=df['Close'])
+    df['ATR'] = atr.average_true_range()
+
     df['VWAP'] = (df['Close'] * df['Volume']).cumsum() / df['Volume'].cumsum()
     df['DayOfWeek'] = df.index.dayofweek
 
+    # --- Cleaning ---
     df.fillna(method='ffill', inplace=True)
     df.dropna(inplace=True)
 
+    # --- Scaling ---
     features = ['Close', 'High', 'Low', 'Volume', 'VWAP', 'MACD', 'RSI', 'ATR', 'DayOfWeek']
     scaler_X = MinMaxScaler()
     X_scaled = scaler_X.fit_transform(df[features])
@@ -73,8 +84,9 @@ def prepare_data(df, look_back, forecast_days):
 
     return np.array(X_samples), np.array(y_samples), scaler_X, scaler_y, df
 
+# -----------------------------
 # Model Builder
-
+# -----------------------------
 def build_model(input_shape, output_units):
     model = Sequential([
         Input(shape=input_shape),
@@ -87,8 +99,9 @@ def build_model(input_shape, output_units):
     model.compile(optimizer='adam', loss='mean_squared_error')
     return model
 
-# Prediction
-
+# -----------------------------
+# Prediction Logic
+# -----------------------------
 def make_forecast(model, X_input, scaler_y, forecast_days):
     pred_vector = model.predict(np.expand_dims(X_input, axis=0), verbose=0)[0]
     pred_scaled = pred_vector.reshape(forecast_days, 3)
@@ -99,8 +112,9 @@ def make_forecast(model, X_input, scaler_y, forecast_days):
     df_pred['Low'] = df_pred['Low'].clip(lower=0)
     return df_pred
 
+# -----------------------------
 # Forecast Trigger
-
+# -----------------------------
 if st.button("Run Forecast"):
     with st.spinner(f"Fetching data and training model for {coin}..."):
         df = yf.download(coin, start="2014-01-01", end=datetime.datetime.now())
@@ -126,6 +140,9 @@ if st.button("Run Forecast"):
             csv = df_pred.to_csv(index=False).encode("utf-8")
             st.download_button("Download CSV", csv, f"{coin}_forecast.csv", "text/csv")
 
+# -----------------------------
+# Footer Disclaimer
+# -----------------------------
 st.markdown("---")
 st.markdown("### Terms of Use & Disclaimer")
 st.markdown("""
