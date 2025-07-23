@@ -50,13 +50,9 @@ def calculate_vwap(df):
 
 def prepare_data(df, look_back=30):
     df['VWAP'] = calculate_vwap(df)
-
-    # MACD
-    df['EMA12'] = df['Close'].ewm(span=12, adjust=False).mean()
-    df['EMA26'] = df['Close'].ewm(span=26, adjust=False).mean()
+    df['EMA12'] = df['Close'].ewm(span=12).mean()
+    df['EMA26'] = df['Close'].ewm(span=26).mean()
     df['MACD'] = df['EMA12'] - df['EMA26']
-
-    # RSI
     delta = df['Close'].diff()
     gain = delta.where(delta > 0, 0)
     loss = -delta.where(delta < 0, 0)
@@ -64,24 +60,16 @@ def prepare_data(df, look_back=30):
     avg_loss = loss.rolling(window=14).mean()
     rs = avg_gain / avg_loss
     df['RSI'] = 100 - (100 / (1 + rs))
-
-    # Bollinger Bands
     df['MA20'] = df['Close'].rolling(window=20).mean()
     df['STD20'] = df['Close'].rolling(window=20).std()
     df['Upper_BB'] = df['MA20'] + 2 * df['STD20']
     df['Lower_BB'] = df['MA20'] - 2 * df['STD20']
-
-    # ATR
     df['H-L'] = df['High'] - df['Low']
     df['H-PC'] = abs(df['High'] - df['Close'].shift(1))
     df['L-PC'] = abs(df['Low'] - df['Close'].shift(1))
     df['TR'] = df[['H-L', 'H-PC', 'L-PC']].max(axis=1)
     df['ATR'] = df['TR'].rolling(window=14).mean()
-
-    # OBV
     df['OBV'] = (np.sign(df['Close'].diff()) * df['Volume']).fillna(0).cumsum()
-
-    # Return
     df['Return'] = df['Close'].pct_change()
 
     df = df.dropna()
@@ -92,11 +80,11 @@ def prepare_data(df, look_back=30):
     ]
 
     scaler = MinMaxScaler()
-    scaled_data = scaler.fit_transform(df[features])
+    scaled = scaler.fit_transform(df[features])
     X, y = [], []
-    for i in range(look_back, len(scaled_data)):
-        X.append(scaled_data[i - look_back:i])
-        y.append(df[['Close', 'High', 'Low']].iloc[i].values)  # raw prices
+    for i in range(look_back, len(scaled)):
+        X.append(scaled[i - look_back:i])
+        y.append(scaled[i, :3])  # scaled Close, High, Low
     return np.array(X), np.array(y), scaler, df
 
 def build_model(input_shape):
@@ -111,19 +99,23 @@ def build_model(input_shape):
     model.compile(optimizer='adam', loss='mae')
     return model
 
-def predict_future(model, recent_input, steps=7):
+def predict_future(model, recent_input, scaler, steps=7):
     future_input = recent_input.copy()
-    future_preds = []
+    future_preds_scaled = []
     for _ in range(steps):
         input_seq = future_input.reshape(1, 30, future_input.shape[1])
-        pred = model.predict(input_seq, verbose=0)[0]
-        future_preds.append(pred)
+        pred_scaled = model.predict(input_seq, verbose=0)[0]
+        future_preds_scaled.append(pred_scaled)
 
-        # Use last indicators
         last_features = future_input[-1, 3:].copy()
-        next_input = np.append(pred, last_features).reshape(1, -1)
+        next_input = np.append(pred_scaled, last_features).reshape(1, -1)
         future_input = np.vstack([future_input[1:], next_input])
-    return np.array(future_preds)
+
+    # Inverse transform: pad with zeros to match original scaler shape
+    future_preds_scaled = np.array(future_preds_scaled)
+    padded = np.hstack([future_preds_scaled, np.zeros((steps, future_input.shape[1] - 3))])
+    preds_unscaled = scaler.inverse_transform(padded)[:, :3]
+    return preds_unscaled
 
 # --------------------------------------
 # User Input
@@ -157,7 +149,7 @@ if st.button("🚀 Run Forecast"):
                 'Close', 'High', 'Low', 'VWAP', 'MACD', 'RSI',
                 'Upper_BB', 'Lower_BB', 'ATR', 'OBV', 'Return'
             ]].iloc[-30:])
-            preds = predict_future(model, recent_scaled, steps=forecast_days)
+            preds = predict_future(model, recent_scaled, scaler, steps=forecast_days)
 
             start_date = pd.to_datetime("today").normalize()
             future_dates = [(start_date + datetime.timedelta(days=i)).strftime('%Y-%m-%d') for i in range(forecast_days)]
@@ -180,6 +172,10 @@ This site is for **educational and informational purposes only**. The prediction
 You are solely responsible for any financial decisions you make. We are not registered financial advisors and do not offer personalized trading strategies.
 
 Any contributions or donations made are considered **voluntary support for continued development** and do not constitute a purchase of financial products or services.
+
+**Use at your own risk.**
+""")
+
 
 **Use at your own risk.**
 """)
