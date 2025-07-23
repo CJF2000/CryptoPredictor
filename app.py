@@ -4,11 +4,8 @@ import pandas as pd
 import yfinance as yf
 import datetime
 from sklearn.preprocessing import MinMaxScaler
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import mean_absolute_error
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import Input, LSTM, Dense, Dropout
-import xgboost as xgb
 
 st.set_page_config(page_title="Crypto Forecast Bot", layout="centered")
 hide_streamlit_style = """
@@ -32,7 +29,7 @@ st.markdown("""
 st.markdown("""
 Welcome to the 7-day **Crypto Price Predictor**.
 
-📈 Powered by AI (LSTM neural networks + XGBoost ensemble)  
+📈 Powered by AI (LSTM neural networks)  
 🔐 Access is password-protected — DM [@Forest_Wizard](https://t.me/Forecast_Wizard) on Telegram or Discord to unlock.  
 💸 Suggested donation: **$10/month or 50 for lifetime access**   
 Cashapp: ForecastWizard  
@@ -79,19 +76,7 @@ def prepare_data(df, look_back=30):
                 'Upper_BB', 'Lower_BB', 'ATR', 'OBV', 'Return']
     scaler = MinMaxScaler()
     scaled = scaler.fit_transform(df[features])
-
-    price_scaler = MinMaxScaler()
-    price_scaler.fit(df[['Close', 'High', 'Low']])
-
-    X_lstm, y_lstm = [], []
-    for i in range(look_back, len(scaled)):
-        X_lstm.append(scaled[i - look_back:i])
-        y_lstm.append(scaled[i, :3])
-
-    X_xgb = [scaled[i - look_back:i].flatten() for i in range(look_back, len(scaled))]
-    y_xgb = df[['Close', 'High', 'Low']].values[look_back:]
-
-    return np.array(X_lstm), np.array(y_lstm), np.array(X_xgb), np.array(y_xgb), scaler, price_scaler, df
+    return scaled, scaler, df
 
 def build_lstm(input_shape):
     model = Sequential([
@@ -105,18 +90,29 @@ def build_lstm(input_shape):
     model.compile(optimizer='adam', loss='mae')
     return model
 
-def predict_lstm(model, recent_input, scaler, steps=7):
+def predict_lstm_rolling(df, features, look_back=30, forecast_days=7):
+    scaled, scaler, df_full = prepare_data(df, look_back)
+    X, y = [], []
+    for i in range(look_back, len(scaled)):
+        X.append(scaled[i - look_back:i])
+        y.append(scaled[i, :3])
+    X, y = np.array(X), np.array(y)
+
+    model = build_lstm((X.shape[1], X.shape[2]))
+    model.fit(X, y, epochs=200, batch_size=32, verbose=0)
+
+    recent_input = scaled[-look_back:]
     future_input = recent_input.copy()
     future_preds_scaled = []
-    for _ in range(steps):
-        input_seq = future_input.reshape(1, 30, future_input.shape[1])
+    for _ in range(forecast_days):
+        input_seq = future_input.reshape(1, look_back, future_input.shape[1])
         pred_scaled = model.predict(input_seq, verbose=0)[0]
         future_preds_scaled.append(pred_scaled)
         last_features = future_input[-1, 3:].copy()
         next_input = np.append(pred_scaled, last_features).reshape(1, -1)
         future_input = np.vstack([future_input[1:], next_input])
 
-    padded = np.hstack([future_preds_scaled, np.zeros((steps, future_input.shape[1] - 3))])
+    padded = np.hstack([future_preds_scaled, np.zeros((forecast_days, future_input.shape[1] - 3))])
     preds_unscaled = scaler.inverse_transform(padded)[:, :3]
     return preds_unscaled
 
@@ -134,54 +130,40 @@ try:
 except Exception as e:
     st.warning(f"Couldn't fetch price: {e}")
 
-forecast_days = st.slider("🗖️ Forecast Days", 1, 15, 7)
+forecast_days = st.slider("📆 Forecast Days", 1, 15, 7)
+
+force_retrain = st.checkbox("🔄 Force retraining on next forecast run")
 
 if st.button("🚀 Run Forecast"):
     with st.spinner(f"Fetching and training {coin}..."):
+        cache_key = f"forecast_{coin}"
+        now = datetime.datetime.now(datetime.timezone.utc).astimezone()
+        today_9am = now.replace(hour=9, minute=0, second=0, microsecond=0)
+        if now < today_9am:
+            today_9am -= datetime.timedelta(days=1)
+
+        @st.cache_data(ttl=86400, show_spinner=False)
+        def load_prediction():
+            df = yf.download(coin, start="2014-01-01", end=datetime.datetime.now())
+            preds = predict_lstm_rolling(df, ['Close', 'High', 'Low', 'VWAP', 'MACD', 'RSI', 'Upper_BB', 'Lower_BB', 'ATR', 'OBV', 'Return'], forecast_days=forecast_days)
+            return preds
+
         df = yf.download(coin, start="2014-01-01", end=datetime.datetime.now())
         if df.shape[0] < 100:
             st.error("⚠️ Not enough data to evaluate.")
         else:
-            X_lstm, y_lstm, X_xgb, y_xgb, scaler, price_scaler, df_full = prepare_data(df)
-
-            lstm_model = build_lstm((X_lstm.shape[1], X_lstm.shape[2]))
-            lstm_model.fit(X_lstm, y_lstm, epochs=10, batch_size=32, verbose=0)
-            recent_lstm = scaler.transform(df_full.iloc[-30:][['Close', 'High', 'Low', 'VWAP', 'MACD', 'RSI',
-                                                              'Upper_BB', 'Lower_BB', 'ATR', 'OBV', 'Return']])
-            preds_lstm = predict_lstm(lstm_model, recent_lstm, scaler, steps=forecast_days)
-
-            preds_xgb = []
-            for i in range(3):
-                model = xgb.XGBRegressor()
-                X_train, X_test, y_train, y_test = train_test_split(X_xgb, y_xgb[:, i], test_size=0.2, shuffle=False)
-                model.fit(X_train, y_train)
-                pred_scaled = [model.predict(X_xgb[-1].reshape(1, -1))[0]] * forecast_days
-                preds_xgb.append(pred_scaled)
-
-            preds_xgb = np.array(preds_xgb).T
-            preds_xgb_unscaled = preds_xgb
-
+            preds = predict_lstm_rolling(df, ['Close', 'High', 'Low', 'VWAP', 'MACD', 'RSI', 'Upper_BB', 'Lower_BB', 'ATR', 'OBV', 'Return'], forecast_days=forecast_days) if force_retrain else load_prediction()
             start_date = datetime.datetime.now().date()
             future_dates = [(start_date + datetime.timedelta(days=i)).strftime('%Y-%m-%d') for i in range(forecast_days)]
 
-            df_pred = pd.DataFrame({
-                'Date': future_dates,
-                'Close_LSTM': preds_lstm[:, 0],
-                'High_LSTM': preds_lstm[:, 1],
-                'Low_LSTM': preds_lstm[:, 2],
-                'Close_XGB': preds_xgb_unscaled[:, 0],
-                'High_XGB': preds_xgb_unscaled[:, 1],
-                'Low_XGB': preds_xgb_unscaled[:, 2],
-                'Close': (preds_lstm[:, 0] + preds_xgb_unscaled[:, 0]) / 2,
-                'High': (preds_lstm[:, 1] + preds_xgb_unscaled[:, 1]) / 2,
-                'Low': (preds_lstm[:, 2] + preds_xgb_unscaled[:, 2]) / 2
-            })
+            df_pred = pd.DataFrame(preds, columns=['Close', 'High', 'Low'])
+            df_pred.insert(0, 'Date', future_dates)
 
             st.success("📈 Forecast complete!")
-            st.dataframe(df_pred[['Date', 'Close', 'High', 'Low']])
-            st.line_chart(df_pred.set_index("Date")[['Close']])
+            st.dataframe(df_pred)
+            st.line_chart(df_pred.set_index("Date")['Close'])
 
-            csv = df_pred[['Date', 'Close', 'High', 'Low']].to_csv(index=False).encode("utf-8")
+            csv = df_pred.to_csv(index=False).encode("utf-8")
             st.download_button("📅 Download CSV", csv, f"{coin}_forecast.csv", "text/csv")
 
 st.markdown("---")
