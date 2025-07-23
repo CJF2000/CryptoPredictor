@@ -89,7 +89,7 @@ def prepare_data(df, look_back=30):
         y_lstm.append(scaled[i, :3])
 
     X_xgb = [scaled[i - look_back:i].flatten() for i in range(look_back, len(scaled))]
-    y_xgb = [scaled[i, :3] for i in range(look_back, len(scaled))]
+    y_xgb = df[['Close', 'High', 'Low']].values[look_back:]
 
     return np.array(X_lstm), np.array(y_lstm), np.array(X_xgb), np.array(y_xgb), scaler, price_scaler, df
 
@@ -159,7 +159,7 @@ if st.button("🚀 Run Forecast"):
                 preds_xgb.append(pred_scaled)
 
             preds_xgb = np.array(preds_xgb).T
-            preds_xgb_unscaled = price_scaler.inverse_transform(preds_xgb)
+            preds_xgb_unscaled = preds_xgb
 
             start_date = datetime.datetime.now().date()
             future_dates = [(start_date + datetime.timedelta(days=i)).strftime('%Y-%m-%d') for i in range(forecast_days)]
@@ -195,4 +195,3 @@ Any contributions or donations made are considered **voluntary support for conti
 
 **Use at your own risk.**
 """)
-
