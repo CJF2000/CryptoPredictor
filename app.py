@@ -34,7 +34,7 @@ Welcome to the 7-day **Crypto Price Predictor**.
 📈 Powered by AI (LSTM neural networks)  
 🔒 Access is password-protected — DM [@Forest_Wizard](https://t.me/Forecast_Wizard) on Telegram or Discord to unlock.  
 💸 Suggested donation: **$10/month or 50 for lifetime access**   
-Cashapp: ForecastWizard
+Cashapp: ForecastWizard  
 Venmo: Forecast_Wizard   
 Accept Other Forms of Payment Just DM Me For Access
 """)
@@ -154,7 +154,8 @@ if st.button("🚀 Run Forecast"):
             ]].iloc[-30:])
             preds = predict_future(model, recent_scaled, scaler, steps=forecast_days)
 
-            start_date = pd.to_datetime("today").normalize()
+            # ✅ Forecast starts today, not tomorrow
+            start_date = datetime.datetime.now().date()
             future_dates = [(start_date + datetime.timedelta(days=i)).strftime('%Y-%m-%d') for i in range(forecast_days)]
             
             df_pred = pd.DataFrame(preds, columns=['Close', 'High', 'Low'])
