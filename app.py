@@ -33,7 +33,7 @@ Welcome to the 7-day **Crypto Price Predictor**.
 
 📈 Powered by AI (LSTM neural networks)  
 🔒 Access is password-protected — DM [@Forest_Wizard](https://t.me/Forecast_Wizard) to unlock.  
-💸 Suggested donation: **$10/month or $50 for lifetime access**
+💸 Suggested donation: **$10/month or 50 for lifetime access**
 Cashapp: ForestWizard777
 Venmo: Forest_Wizard
 Accept Other Forms of Payment Just DM Me For Access
