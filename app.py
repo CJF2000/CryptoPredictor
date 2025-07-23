@@ -7,13 +7,13 @@ from sklearn.preprocessing import MinMaxScaler
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import Input, LSTM, Dense, Dropout
 
-# Technical analysis
+# Technical indicators
 from ta.trend import MACD
 from ta.momentum import RSIIndicator
 from ta.volatility import AverageTrueRange
 
 # -----------------------------
-# Streamlit UI - Hide defaults & Setup page
+# Streamlit Setup
 # -----------------------------
 st.set_page_config(page_title="Crypto Forecast Bot", layout="centered")
 hide_streamlit_style = """
@@ -39,7 +39,7 @@ if password != "brickedalpha":
     st.stop()
 st.success("✅ Access granted.")
 
-# Configuration
+# Config options
 look_back = 30
 forecast_days = st.slider("Forecast Days", 1, 15, 7)
 coin = st.selectbox("Choose a coin", ['BTC-USD', 'ETH-USD', 'XRP-USD', 'SOL-USD'])
@@ -50,24 +50,22 @@ coin = st.selectbox("Choose a coin", ['BTC-USD', 'ETH-USD', 'XRP-USD', 'SOL-USD'
 def prepare_data(df, look_back, forecast_days):
     df.index = pd.to_datetime(df.index)
 
-    # --- Indicators (all class-based format) ---
+    # --- Indicators (flattened output) ---
     macd = MACD(close=df['Close'])
-    df['MACD'] = macd.macd()
+    df['MACD'] = macd.macd().values.flatten()
 
     rsi = RSIIndicator(close=df['Close'])
-    df['RSI'] = rsi.rsi()
+    df['RSI'] = rsi.rsi().values.flatten()
 
     atr = AverageTrueRange(high=df['High'], low=df['Low'], close=df['Close'])
-    df['ATR'] = atr.average_true_range()
+    df['ATR'] = atr.average_true_range().values.flatten()
 
     df['VWAP'] = (df['Close'] * df['Volume']).cumsum() / df['Volume'].cumsum()
     df['DayOfWeek'] = df.index.dayofweek
 
-    # --- Cleaning ---
     df.fillna(method='ffill', inplace=True)
     df.dropna(inplace=True)
 
-    # --- Scaling ---
     features = ['Close', 'High', 'Low', 'Volume', 'VWAP', 'MACD', 'RSI', 'ATR', 'DayOfWeek']
     scaler_X = MinMaxScaler()
     X_scaled = scaler_X.fit_transform(df[features])
@@ -100,7 +98,7 @@ def build_model(input_shape, output_units):
     return model
 
 # -----------------------------
-# Prediction Logic
+# Forecast Prediction
 # -----------------------------
 def make_forecast(model, X_input, scaler_y, forecast_days):
     pred_vector = model.predict(np.expand_dims(X_input, axis=0), verbose=0)[0]
@@ -113,7 +111,7 @@ def make_forecast(model, X_input, scaler_y, forecast_days):
     return df_pred
 
 # -----------------------------
-# Forecast Trigger
+# Run Forecast
 # -----------------------------
 if st.button("Run Forecast"):
     with st.spinner(f"Fetching data and training model for {coin}..."):
@@ -141,7 +139,7 @@ if st.button("Run Forecast"):
             st.download_button("Download CSV", csv, f"{coin}_forecast.csv", "text/csv")
 
 # -----------------------------
-# Footer Disclaimer
+# Disclaimer
 # -----------------------------
 st.markdown("---")
 st.markdown("### Terms of Use & Disclaimer")
@@ -154,6 +152,5 @@ Any contributions or donations made are considered **voluntary support for conti
 
 **Use at your own risk.**
 """)
-
 
 
