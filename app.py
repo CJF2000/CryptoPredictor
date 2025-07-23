@@ -80,6 +80,9 @@ def prepare_data(df, look_back=30):
     scaler = MinMaxScaler()
     scaled = scaler.fit_transform(df[features])
 
+    price_scaler = MinMaxScaler()
+    price_scaler.fit(df[['Close', 'High', 'Low']])
+
     X_lstm, y_lstm = [], []
     for i in range(look_back, len(scaled)):
         X_lstm.append(scaled[i - look_back:i])
@@ -88,7 +91,7 @@ def prepare_data(df, look_back=30):
     X_xgb = [scaled[i - look_back:i].flatten() for i in range(look_back, len(scaled))]
     y_xgb = [scaled[i, :3] for i in range(look_back, len(scaled))]
 
-    return np.array(X_lstm), np.array(y_lstm), np.array(X_xgb), np.array(y_xgb), scaler, df
+    return np.array(X_lstm), np.array(y_lstm), np.array(X_xgb), np.array(y_xgb), scaler, price_scaler, df
 
 def build_lstm(input_shape):
     model = Sequential([
@@ -139,16 +142,14 @@ if st.button("🚀 Run Forecast"):
         if df.shape[0] < 100:
             st.error("⚠️ Not enough data to evaluate.")
         else:
-            X_lstm, y_lstm, X_xgb, y_xgb, scaler, df_full = prepare_data(df)
+            X_lstm, y_lstm, X_xgb, y_xgb, scaler, price_scaler, df_full = prepare_data(df)
 
-            # Train LSTM
             lstm_model = build_lstm((X_lstm.shape[1], X_lstm.shape[2]))
             lstm_model.fit(X_lstm, y_lstm, epochs=10, batch_size=32, verbose=0)
             recent_lstm = scaler.transform(df_full.iloc[-30:][['Close', 'High', 'Low', 'VWAP', 'MACD', 'RSI',
                                                               'Upper_BB', 'Lower_BB', 'ATR', 'OBV', 'Return']])
             preds_lstm = predict_lstm(lstm_model, recent_lstm, scaler, steps=forecast_days)
 
-            # Train XGBoost for Close, High, Low
             preds_xgb = []
             for i in range(3):
                 model = xgb.XGBRegressor()
@@ -158,8 +159,7 @@ if st.button("🚀 Run Forecast"):
                 preds_xgb.append(pred_scaled)
 
             preds_xgb = np.array(preds_xgb).T
-            padded = np.hstack([preds_xgb, np.zeros((forecast_days, recent_lstm.shape[1] - 3))])
-            preds_xgb_unscaled = scaler.inverse_transform(padded)[:, :3]
+            preds_xgb_unscaled = price_scaler.inverse_transform(preds_xgb)
 
             start_date = datetime.datetime.now().date()
             future_dates = [(start_date + datetime.timedelta(days=i)).strftime('%Y-%m-%d') for i in range(forecast_days)]
