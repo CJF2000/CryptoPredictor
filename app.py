@@ -21,7 +21,7 @@ hide_streamlit_style = """
 st.markdown(hide_streamlit_style, unsafe_allow_html=True)
 
 # 🔐 Password Wall
-st.title("🔮 Crypto Forecast Bot")
+st.title("Crypto Forecast Bot")
 st.markdown("""
 > ⚠️ **Disclaimer:** This tool is for educational and informational purposes only.  
 > It is not financial advice and should not be used to make investment decisions.  
@@ -37,7 +37,7 @@ Welcome to the 7-day **Crypto Price Predictor**.
 """)
 
 password = st.text_input("Enter Access Password", type="password")
-if password != "brickedalpha":  # 🔑 Change this regularly
+if password != "brickedalpha":
     st.warning("Access denied. DM @YourTelegram to get your password.")
     st.stop()
 st.success("✅ Access granted.")
@@ -50,8 +50,24 @@ def calculate_vwap(df):
 
 def prepare_data(df, look_back=30):
     df['VWAP'] = calculate_vwap(df)
+
+    # MACD
+    df['EMA12'] = df['Close'].ewm(span=12, adjust=False).mean()
+    df['EMA26'] = df['Close'].ewm(span=26, adjust=False).mean()
+    df['MACD'] = df['EMA12'] - df['EMA26']
+
+    # RSI
+    delta = df['Close'].diff()
+    gain = delta.where(delta > 0, 0)
+    loss = -delta.where(delta < 0, 0)
+    avg_gain = gain.rolling(window=14).mean()
+    avg_loss = loss.rolling(window=14).mean()
+    rs = avg_gain / avg_loss
+    df['RSI'] = 100 - (100 / (1 + rs))
+
     df = df.dropna()
-    features = ['Close', 'High', 'Low', 'VWAP']
+
+    features = ['Close', 'High', 'Low', 'VWAP', 'MACD', 'RSI']
     scaler = MinMaxScaler()
     scaled_data = scaler.fit_transform(df[features])
     X, y = [], []
@@ -74,14 +90,16 @@ def predict_future(model, recent_input, scaler, steps=7):
     future_input = recent_input.copy()
     future_preds_scaled = []
     for _ in range(steps):
-        input_seq = future_input.reshape(1, 30, 4)
+        input_seq = future_input.reshape(1, 30, 6)
         pred = model.predict(input_seq, verbose=0)[0]
         future_preds_scaled.append(pred)
         dummy_vwap = future_input[-1, 3]
-        next_input = np.append(pred, dummy_vwap).reshape(1, 4)
+        dummy_macd = future_input[-1, 4]
+        dummy_rsi = future_input[-1, 5]
+        next_input = np.append(pred, [dummy_vwap, dummy_macd, dummy_rsi]).reshape(1, 6)
         future_input = np.vstack([future_input[1:], next_input])
     future_preds_scaled = np.array(future_preds_scaled)
-    padded_preds = np.hstack([future_preds_scaled, np.zeros((steps, 1))])
+    padded_preds = np.hstack([future_preds_scaled, np.zeros((steps, 3))])
     return scaler.inverse_transform(padded_preds)[:, :3]
 
 # --------------------------------------
@@ -91,7 +109,6 @@ st.header("📊 Forecast Dashboard")
 
 coin = st.selectbox("🪙 Choose a coin", ['BTC-USD', 'ETH-USD', 'XRP-USD', 'SOL-USD'])
 
-# 🔄 Show current price with metric
 try:
     current_data = yf.Ticker(coin).history(period="1d", interval="1m")
     if not current_data.empty:
@@ -113,10 +130,9 @@ if st.button("🚀 Run Forecast"):
             X, y, scaler, df_full = prepare_data(df)
             model = build_model((X.shape[1], X.shape[2]))
             model.fit(X, y, epochs=10, batch_size=32, verbose=0)
-            recent_scaled = scaler.transform(df_full[['Close', 'High', 'Low', 'VWAP']].iloc[-30:])
+            recent_scaled = scaler.transform(df_full[['Close', 'High', 'Low', 'VWAP', 'MACD', 'RSI']].iloc[-30:])
             preds = predict_future(model, recent_scaled, scaler, steps=forecast_days)
 
-            # Use today's date as the base for predictions
             start_date = pd.to_datetime("today").normalize()
             future_dates = [(start_date + datetime.timedelta(days=i)).strftime('%Y-%m-%d') for i in range(forecast_days)]
             
@@ -141,6 +157,5 @@ Any contributions or donations made are considered **voluntary support for conti
 
 **Use at your own risk.**
 """)
-
 
 
