@@ -85,7 +85,6 @@ def prepare_data(df, look_back=30):
         X_lstm.append(scaled[i - look_back:i])
         y_lstm.append(scaled[i, :3])
 
-    # For XGBoost, flatten the input
     X_xgb = [scaled[i - look_back:i].flatten() for i in range(look_back, len(scaled))]
     y_xgb = [scaled[i, :3] for i in range(look_back, len(scaled))]
 
@@ -149,14 +148,18 @@ if st.button("🚀 Run Forecast"):
                                                               'Upper_BB', 'Lower_BB', 'ATR', 'OBV', 'Return']])
             preds_lstm = predict_lstm(lstm_model, recent_lstm, scaler, steps=forecast_days)
 
-            # Train XGBoost
-            xgb_model = xgb.XGBRegressor()
-            X_train, X_test, y_train, y_test = train_test_split(X_xgb, y_xgb[:, 0], test_size=0.2, shuffle=False)
-            xgb_model.fit(X_train, y_train)
-            xgb_recent_input = X_xgb[-1].reshape(1, -1)
-            preds_xgb_scaled = [xgb_model.predict(xgb_recent_input)[0]] * forecast_days
-            padded = np.hstack([np.array(preds_xgb_scaled).reshape(-1, 1), np.zeros((forecast_days, recent_lstm.shape[1] - 1))])
-            preds_xgb = scaler.inverse_transform(padded)[:, 0]
+            # Train XGBoost for Close, High, Low
+            preds_xgb = []
+            for i in range(3):
+                model = xgb.XGBRegressor()
+                X_train, X_test, y_train, y_test = train_test_split(X_xgb, y_xgb[:, i], test_size=0.2, shuffle=False)
+                model.fit(X_train, y_train)
+                pred_scaled = [model.predict(X_xgb[-1].reshape(1, -1))[0]] * forecast_days
+                preds_xgb.append(pred_scaled)
+
+            preds_xgb = np.array(preds_xgb).T
+            padded = np.hstack([preds_xgb, np.zeros((forecast_days, recent_lstm.shape[1] - 3))])
+            preds_xgb_unscaled = scaler.inverse_transform(padded)[:, :3]
 
             start_date = datetime.datetime.now().date()
             future_dates = [(start_date + datetime.timedelta(days=i)).strftime('%Y-%m-%d') for i in range(forecast_days)]
@@ -164,15 +167,21 @@ if st.button("🚀 Run Forecast"):
             df_pred = pd.DataFrame({
                 'Date': future_dates,
                 'Close_LSTM': preds_lstm[:, 0],
-                'Close_XGB': preds_xgb,
-                'Blended_Close': (preds_lstm[:, 0] + preds_xgb) / 2
+                'High_LSTM': preds_lstm[:, 1],
+                'Low_LSTM': preds_lstm[:, 2],
+                'Close_XGB': preds_xgb_unscaled[:, 0],
+                'High_XGB': preds_xgb_unscaled[:, 1],
+                'Low_XGB': preds_xgb_unscaled[:, 2],
+                'Close': (preds_lstm[:, 0] + preds_xgb_unscaled[:, 0]) / 2,
+                'High': (preds_lstm[:, 1] + preds_xgb_unscaled[:, 1]) / 2,
+                'Low': (preds_lstm[:, 2] + preds_xgb_unscaled[:, 2]) / 2
             })
 
             st.success("📈 Forecast complete!")
-            st.dataframe(df_pred)
-            st.line_chart(df_pred.set_index("Date")[["Blended_Close"]])
+            st.dataframe(df_pred[['Date', 'Close', 'High', 'Low']])
+            st.line_chart(df_pred.set_index("Date")[['Close']])
 
-            csv = df_pred.to_csv(index=False).encode("utf-8")
+            csv = df_pred[['Date', 'Close', 'High', 'Low']].to_csv(index=False).encode("utf-8")
             st.download_button("📅 Download CSV", csv, f"{coin}_forecast.csv", "text/csv")
 
 st.markdown("---")
