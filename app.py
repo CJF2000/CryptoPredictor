@@ -5,7 +5,7 @@ import yfinance as yf
 import datetime
 from sklearn.preprocessing import MinMaxScaler
 from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import Input, LSTM, Dense
+from tensorflow.keras.layers import Input, LSTM, Dense, Dropout
 
 # 🔒 Hide Streamlit UI elements
 st.set_page_config(page_title="Crypto Forecast Bot", layout="centered")
@@ -65,42 +65,65 @@ def prepare_data(df, look_back=30):
     rs = avg_gain / avg_loss
     df['RSI'] = 100 - (100 / (1 + rs))
 
+    # Bollinger Bands
+    df['MA20'] = df['Close'].rolling(window=20).mean()
+    df['STD20'] = df['Close'].rolling(window=20).std()
+    df['Upper_BB'] = df['MA20'] + 2 * df['STD20']
+    df['Lower_BB'] = df['MA20'] - 2 * df['STD20']
+
+    # ATR
+    df['H-L'] = df['High'] - df['Low']
+    df['H-PC'] = abs(df['High'] - df['Close'].shift(1))
+    df['L-PC'] = abs(df['Low'] - df['Close'].shift(1))
+    df['TR'] = df[['H-L', 'H-PC', 'L-PC']].max(axis=1)
+    df['ATR'] = df['TR'].rolling(window=14).mean()
+
+    # OBV
+    df['OBV'] = (np.sign(df['Close'].diff()) * df['Volume']).fillna(0).cumsum()
+
+    # Return
+    df['Return'] = df['Close'].pct_change()
+
     df = df.dropna()
 
-    features = ['Close', 'High', 'Low', 'VWAP', 'MACD', 'RSI']
+    features = [
+        'Close', 'High', 'Low', 'VWAP', 'MACD', 'RSI',
+        'Upper_BB', 'Lower_BB', 'ATR', 'OBV', 'Return'
+    ]
+
     scaler = MinMaxScaler()
     scaled_data = scaler.fit_transform(df[features])
     X, y = [], []
     for i in range(look_back, len(scaled_data)):
         X.append(scaled_data[i - look_back:i])
-        y.append(scaled_data[i, :3])
+        y.append(df[['Close', 'High', 'Low']].iloc[i].values)  # raw prices
     return np.array(X), np.array(y), scaler, df
 
 def build_model(input_shape):
     model = Sequential([
         Input(shape=input_shape),
         LSTM(64, return_sequences=True),
+        Dropout(0.2),
         LSTM(32),
+        Dropout(0.2),
         Dense(3)
     ])
-    model.compile(optimizer='adam', loss='mean_squared_error')
+    model.compile(optimizer='adam', loss='mae')
     return model
 
-def predict_future(model, recent_input, scaler, steps=7):
+def predict_future(model, recent_input, steps=7):
     future_input = recent_input.copy()
-    future_preds_scaled = []
+    future_preds = []
     for _ in range(steps):
-        input_seq = future_input.reshape(1, 30, 6)
+        input_seq = future_input.reshape(1, 30, future_input.shape[1])
         pred = model.predict(input_seq, verbose=0)[0]
-        future_preds_scaled.append(pred)
-        dummy_vwap = future_input[-1, 3]
-        dummy_macd = future_input[-1, 4]
-        dummy_rsi = future_input[-1, 5]
-        next_input = np.append(pred, [dummy_vwap, dummy_macd, dummy_rsi]).reshape(1, 6)
+        future_preds.append(pred)
+
+        # Use last indicators
+        last_features = future_input[-1, 3:].copy()
+        next_input = np.append(pred, last_features).reshape(1, -1)
         future_input = np.vstack([future_input[1:], next_input])
-    future_preds_scaled = np.array(future_preds_scaled)
-    padded_preds = np.hstack([future_preds_scaled, np.zeros((steps, 3))])
-    return scaler.inverse_transform(padded_preds)[:, :3]
+    return np.array(future_preds)
 
 # --------------------------------------
 # User Input
@@ -130,8 +153,11 @@ if st.button("🚀 Run Forecast"):
             X, y, scaler, df_full = prepare_data(df)
             model = build_model((X.shape[1], X.shape[2]))
             model.fit(X, y, epochs=10, batch_size=32, verbose=0)
-            recent_scaled = scaler.transform(df_full[['Close', 'High', 'Low', 'VWAP', 'MACD', 'RSI']].iloc[-30:])
-            preds = predict_future(model, recent_scaled, scaler, steps=forecast_days)
+            recent_scaled = scaler.transform(df_full[[
+                'Close', 'High', 'Low', 'VWAP', 'MACD', 'RSI',
+                'Upper_BB', 'Lower_BB', 'ATR', 'OBV', 'Return'
+            ]].iloc[-30:])
+            preds = predict_future(model, recent_scaled, steps=forecast_days)
 
             start_date = pd.to_datetime("today").normalize()
             future_dates = [(start_date + datetime.timedelta(days=i)).strftime('%Y-%m-%d') for i in range(forecast_days)]
@@ -157,5 +183,4 @@ Any contributions or donations made are considered **voluntary support for conti
 
 **Use at your own risk.**
 """)
-
 
