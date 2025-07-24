@@ -28,7 +28,7 @@ with col2:
         with st.spinner("Training all coins..."):
             try:
                 for c in ['BTC-USD', 'ETH-USD', 'XRP-USD', 'SOL-USD']:
-                    train_and_save_forecast(c, forecast_days=7, epochs=150)
+                    train_and_save_forecast(c, forecast_days=7, epochs=300)
                 st.success("✅ All forecasts updated!")
             except Exception as e:
                 st.error(f"Training failed: {e}")
