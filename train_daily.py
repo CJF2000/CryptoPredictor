@@ -70,16 +70,6 @@ def train_and_save_forecast(coin, forecast_days=7, epochs=150):
     df_pred = pd.DataFrame(preds, columns=['Close', 'High', 'Low'])
     df_pred.insert(0, 'Date', future_dates)
 
-    # ✅ Fix weird cases like High < Close or Low > Close
-    for i in range(len(df_pred)):
-        close = df_pred.loc[i, 'Close']
-        high = df_pred.loc[i, 'High']
-        low = df_pred.loc[i, 'Low']
-        if high < close:
-            df_pred.loc[i, 'High'] = close
-        if low > close:
-            df_pred.loc[i, 'Low'] = close
-
     output_dir = "daily_forecasts"
     os.makedirs(output_dir, exist_ok=True)
     df_pred.to_csv(f"{output_dir}/{coin}_forecast.csv", index=False)
@@ -90,4 +80,3 @@ if __name__ == "__main__":
     coins = ['BTC-USD', 'ETH-USD', 'XRP-USD', 'SOL-USD']
     for coin in coins:
         train_and_save_forecast(coin)
-
