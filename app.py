@@ -19,7 +19,21 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-st.title("🔮 Crypto Forecast Bot")
+# 🧠 Title + Train All Coins
+col1, col2 = st.columns([3, 1])
+with col1:
+    st.title("🔮 Crypto Forecast Bot")
+with col2:
+    if st.button("🛠 Train All Coins"):
+        with st.spinner("Training all coins..."):
+            try:
+                for c in ['BTC-USD', 'ETH-USD', 'XRP-USD', 'SOL-USD']:
+                    train_and_save_forecast(c, forecast_days=7, epochs=150)
+                st.success("✅ All forecasts updated!")
+            except Exception as e:
+                st.error(f"Training failed: {e}")
+
+# 🔐 Access Gate
 st.markdown("""
 > ⚠️ **Disclaimer:** This tool is for educational and informational purposes only.
 > It is not financial advice and should not be used to make investment decisions.
@@ -39,11 +53,12 @@ if password != "Crypto_Forecast777":
     st.stop()
 st.success("✅ Access granted.")
 
+# 📊 Forecast UI
 st.header("📊 Forecast Dashboard")
 
 coin = st.selectbox("🪙 Choose a coin", ['BTC-USD', 'ETH-USD', 'XRP-USD', 'SOL-USD'])
 
-# Show current price
+# 💰 Show current price
 try:
     current_data = yf.Ticker(coin).history(period="1d", interval="1m")
     if not current_data.empty:
@@ -56,7 +71,7 @@ except Exception as e:
 
 forecast_days = st.slider("📆 Forecast Days", 1, 15, 7)
 
-# Check if today's forecast already exists
+# 🔄 Load forecast CSV or retrain if missing
 path = f"daily_forecasts/{coin}_forecast.csv"
 retrain_needed = True
 
@@ -73,11 +88,11 @@ if retrain_needed:
         except Exception as e:
             st.error(f"Training failed: {e}")
 
-# Load and display forecast
+# 📈 Load and display forecast
 if os.path.exists(path):
     df_pred = pd.read_csv(path).head(forecast_days)
 
-    # Sanity fix: make sure High >= Close, Low <= Close
+    # Fix: ensure High ≥ Close and Low ≤ Close
     for i in range(len(df_pred)):
         close = df_pred.loc[i, 'Close']
         high = df_pred.loc[i, 'High']
@@ -87,6 +102,11 @@ if os.path.exists(path):
         if low > close:
             df_pred.loc[i, 'Low'] = close
 
+    # 🕒 Show "Last trained" timestamp
+    last_modified = datetime.datetime.fromtimestamp(os.path.getmtime(path)).strftime('%Y-%m-%d %H:%M:%S')
+    st.caption(f"🕒 Last trained: {last_modified}")
+
+    # Show forecast data
     st.dataframe(df_pred)
     st.line_chart(df_pred.set_index("Date"))
     csv = df_pred.to_csv(index=False).encode("utf-8")
@@ -94,31 +114,8 @@ if os.path.exists(path):
 else:
     st.error("❌ Forecast not available.")
 
-# Optional: manual retrain button
-if st.button("🔁 Manually Retrain This Coin"):
-    with st.spinner(f"Manually training model for {coin}..."):
-        try:
-            train_and_save_forecast(coin, forecast_days=forecast_days, epochs=150)
-            df_pred = pd.read_csv(f"daily_forecasts/{coin}_forecast.csv").head(forecast_days)
-            st.success("✅ Manual training complete!")
-
-            for i in range(len(df_pred)):
-                close = df_pred.loc[i, 'Close']
-                high = df_pred.loc[i, 'High']
-                low = df_pred.loc[i, 'Low']
-                if high < close:
-                    df_pred.loc[i, 'High'] = close
-                if low > close:
-                    df_pred.loc[i, 'Low'] = close
-
-            st.dataframe(df_pred)
-            st.line_chart(df_pred.set_index("Date"))
-        except Exception as e:
-            st.error(f"🚨 Manual training failed: {e}")
-
 st.markdown("---")
 st.markdown("### Terms of Use & Disclaimer")
 st.markdown("""
 This site is for **educational and informational purposes only**. The predictions generated are based on historical data and machine learning models and **should not be interpreted as financial advice or investment guidance**. Use at your own risk.
 """)
-
