@@ -6,7 +6,7 @@ import pandas as pd
 import yfinance as yf
 import datetime
 import os
-from train_daily import train_and_save_forecast  # manual retrain access
+from train_daily import train_and_save_forecast
 
 st.set_page_config(page_title="Crypto Forecast Bot", layout="centered")
 st.markdown("""
@@ -56,25 +56,61 @@ except Exception as e:
 
 forecast_days = st.slider("📆 Forecast Days", 1, 15, 7)
 
-if st.button("🚀 Load Forecast"):
-    path = f"daily_forecasts/{coin}_forecast.csv"
-    if os.path.exists(path):
-        df_pred = pd.read_csv(path)
-        df_pred = df_pred.head(forecast_days)
-        st.success("📈 Forecast loaded!")
-        st.dataframe(df_pred)
-        st.line_chart(df_pred.set_index("Date"))
-        csv = df_pred.to_csv(index=False).encode("utf-8")
-        st.download_button("📥 Download CSV", csv, f"{coin}_forecast.csv", "text/csv")
-    else:
-        st.error("❌ Forecast not available. Try again later.")
+# Check if today's forecast already exists
+path = f"daily_forecasts/{coin}_forecast.csv"
+retrain_needed = True
 
+if os.path.exists(path):
+    df_check = pd.read_csv(path)
+    if not df_check.empty and df_check['Date'].iloc[0] == pd.to_datetime("today").strftime('%Y-%m-%d'):
+        retrain_needed = False
+
+if retrain_needed:
+    with st.spinner(f"Training today’s forecast for {coin}..."):
+        try:
+            train_and_save_forecast(coin, forecast_days=forecast_days, epochs=150)
+            st.success("✅ Daily forecast trained!")
+        except Exception as e:
+            st.error(f"Training failed: {e}")
+
+# Load and display forecast
+if os.path.exists(path):
+    df_pred = pd.read_csv(path).head(forecast_days)
+
+    # Sanity fix: make sure High >= Close, Low <= Close
+    for i in range(len(df_pred)):
+        close = df_pred.loc[i, 'Close']
+        high = df_pred.loc[i, 'High']
+        low = df_pred.loc[i, 'Low']
+        if high < close:
+            df_pred.loc[i, 'High'] = close
+        if low > close:
+            df_pred.loc[i, 'Low'] = close
+
+    st.dataframe(df_pred)
+    st.line_chart(df_pred.set_index("Date"))
+    csv = df_pred.to_csv(index=False).encode("utf-8")
+    st.download_button("📥 Download CSV", csv, f"{coin}_forecast.csv", "text/csv")
+else:
+    st.error("❌ Forecast not available.")
+
+# Optional: manual retrain button
 if st.button("🔁 Manually Retrain This Coin"):
-    with st.spinner(f"Training new model for {coin}..."):
+    with st.spinner(f"Manually training model for {coin}..."):
         try:
             train_and_save_forecast(coin, forecast_days=forecast_days, epochs=150)
             df_pred = pd.read_csv(f"daily_forecasts/{coin}_forecast.csv").head(forecast_days)
             st.success("✅ Manual training complete!")
+
+            for i in range(len(df_pred)):
+                close = df_pred.loc[i, 'Close']
+                high = df_pred.loc[i, 'High']
+                low = df_pred.loc[i, 'Low']
+                if high < close:
+                    df_pred.loc[i, 'High'] = close
+                if low > close:
+                    df_pred.loc[i, 'Low'] = close
+
             st.dataframe(df_pred)
             st.line_chart(df_pred.set_index("Date"))
         except Exception as e:
