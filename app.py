@@ -92,16 +92,6 @@ if retrain_needed:
 if os.path.exists(path):
     df_pred = pd.read_csv(path).head(forecast_days)
 
-    # Fix: ensure High ≥ Close and Low ≤ Close
-    for i in range(len(df_pred)):
-        close = df_pred.loc[i, 'Close']
-        high = df_pred.loc[i, 'High']
-        low = df_pred.loc[i, 'Low']
-        if high < close:
-            df_pred.loc[i, 'High'] = close
-        if low > close:
-            df_pred.loc[i, 'Low'] = close
-
     # 🕒 Show "Last trained" timestamp
     last_modified = datetime.datetime.fromtimestamp(os.path.getmtime(path)).strftime('%Y-%m-%d %H:%M:%S')
     st.caption(f"🕒 Last trained: {last_modified}")
@@ -119,3 +109,4 @@ st.markdown("### Terms of Use & Disclaimer")
 st.markdown("""
 This site is for **educational and informational purposes only**. The predictions generated are based on historical data and machine learning models and **should not be interpreted as financial advice or investment guidance**. Use at your own risk.
 """)
+
