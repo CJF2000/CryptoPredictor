@@ -1,6 +1,5 @@
 import numpy as np
 import pandas as pd
-import yfinance as yf
 from sklearn.preprocessing import MinMaxScaler
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import Input, LSTM, Dense
@@ -9,14 +8,12 @@ def calculate_technical_indicators(df):
     df['Return'] = df['Close'].pct_change()
     df['Momentum'] = df['Close'] - df['Close'].shift(10)
 
-    # MACD and Histogram
     ema_12 = df['Close'].ewm(span=12, adjust=False).mean()
     ema_26 = df['Close'].ewm(span=26, adjust=False).mean()
     df['MACD'] = ema_12 - ema_26
     df['Signal'] = df['MACD'].ewm(span=9, adjust=False).mean()
     df['MACD_Hist'] = df['MACD'] - df['Signal']
 
-    # RSI and RSI Delta
     delta = df['Close'].diff()
     gain = delta.clip(lower=0)
     loss = -delta.clip(upper=0)
@@ -26,30 +23,29 @@ def calculate_technical_indicators(df):
     df['RSI'] = 100 - (100 / (1 + rs))
     df['RSI_Delta'] = df['RSI'].diff()
 
-    # Stochastic RSI
     rsi_min = df['RSI'].rolling(window=14).min()
     rsi_max = df['RSI'].rolling(window=14).max()
     df['StochRSI'] = (df['RSI'] - rsi_min) / (rsi_max - rsi_min + 1e-10)
 
-    # Williams %R
     high14 = df['High'].rolling(14).max()
     low14 = df['Low'].rolling(14).min()
     df['Williams_%R'] = -100 * (high14 - df['Close']) / (high14 - low14 + 1e-10)
 
-    # Bollinger Band %B
     sma_20 = df['Close'].rolling(window=20).mean()
     std_20 = df['Close'].rolling(window=20).std()
     upper_band = sma_20 + 2 * std_20
     lower_band = sma_20 - 2 * std_20
     df['BB%'] = (df['Close'] - lower_band) / (upper_band - lower_band + 1e-10)
 
-    # ATR
     df['H-L'] = df['High'] - df['Low']
     df['H-PC'] = np.abs(df['High'] - df['Close'].shift(1))
     df['L-PC'] = np.abs(df['Low'] - df['Close'].shift(1))
     df['TR'] = df[['H-L', 'H-PC', 'L-PC']].max(axis=1)
     df['ATR'] = df['TR'].rolling(window=14).mean()
 
+    df = df.dropna()
+    if len(df) < 50:
+        raise ValueError("Insufficient data after calculating indicators.")
     return df
 
 def calculate_vwap(df):
@@ -58,7 +54,6 @@ def calculate_vwap(df):
 def prepare_data(df, look_back=30):
     df['VWAP'] = calculate_vwap(df)
     df = calculate_technical_indicators(df)
-    df = df.dropna()
 
     features = ['Close', 'High', 'Low', 'VWAP', 'Return', 'Momentum', 'MACD_Hist', 
                 'RSI_Delta', 'StochRSI', 'Williams_%R', 'BB%', 'ATR']
@@ -69,7 +64,7 @@ def prepare_data(df, look_back=30):
     X, y = [], []
     for i in range(look_back, len(scaled_data)):
         X.append(scaled_data[i - look_back:i])
-        y.append(scaled_data[i, :3])  # Predict Close, High, Low
+        y.append(scaled_data[i, :3])
     
     return np.array(X), np.array(y), scaler, df
 
