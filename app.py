@@ -28,7 +28,7 @@ forecast_days = 7
 
 @st.cache_data(show_spinner=False)
 def load_data(coin):
-    df = yf.download(coin, period="1y", interval="1d", progress=False)
+    df = yf.download(coin, period="4y", interval="1d", progress=False)
     return df
 
 def train_and_save(coin):
