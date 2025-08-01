@@ -33,7 +33,11 @@ def load_data(coin):
 
 def train_and_save(coin):
     df = load_data(coin)
-    X, y, scaler, df_full = prepare_data(df, look_back)
+    try:
+        X, y, scaler, df_full = prepare_data(df, look_back)
+    except ValueError as e:
+        st.error(f"{coin} - {e}")
+        return None, None, None
     model = build_model(X.shape[1:])
     model.fit(X, y, epochs=100, batch_size=32, verbose=0)
     model.save(f"models/{coin}.h5")
@@ -46,8 +50,16 @@ def load_model_and_scaler(coin):
     return model, scaler
 
 def forecast(model, scaler, df):
-    df = df.copy()
-    _, _, _, df_processed = prepare_data(df, look_back)
+    try:
+        _, _, _, df_processed = prepare_data(df, look_back)
+    except ValueError as e:
+        st.error(f"Forecast error: {e}")
+        return []
+
+    if len(df_processed) < look_back:
+        st.error("Not enough data to generate a forecast.")
+        return []
+
     latest_window = df_processed[-look_back:]
 
     features = ['Close', 'High', 'Low', 'VWAP', 'Return', 'Momentum', 'MACD_Hist', 
@@ -58,9 +70,8 @@ def forecast(model, scaler, df):
 
     for _ in range(forecast_days):
         input_seq = np.expand_dims(X_input[-look_back:], axis=0)
-        pred = model.predict(input_seq)[0]
+        pred = model.predict(input_seq, verbose=0)[0]
         forecasts.append(pred)
-
         next_input = np.append(X_input[-look_back + 1:], [pred.tolist() + [0]*(len(X_input[0]) - 3)], axis=0)
         X_input = next_input
 
@@ -81,15 +92,16 @@ with col1:
     if st.button("🔁 Run the Bot"):
         with st.spinner(f"Fetching data and training model for {selected_coin}..."):
             model, scaler, df = train_and_save(selected_coin)
-            forecasted = forecast(model, scaler, df)
+            if model is not None:
+                forecasted = forecast(model, scaler, df)
+                if len(forecasted) > 0:
+                    st.subheader("📊 7-Day Forecast")
+                    forecast_df = pd.DataFrame(forecasted, columns=["Close", "High", "Low"])
+                    forecast_df.index = pd.date_range(start=datetime.date.today() + datetime.timedelta(days=1), periods=7)
+                    st.line_chart(forecast_df)
 
-        st.subheader("📊 7-Day Forecast")
-        forecast_df = pd.DataFrame(forecasted, columns=["Close", "High", "Low"])
-        forecast_df.index = pd.date_range(start=datetime.date.today() + datetime.timedelta(days=1), periods=7)
-        st.line_chart(forecast_df)
-
-        csv = forecast_df.to_csv().encode('utf-8')
-        st.download_button("Download CSV", data=csv, file_name=f"{selected_coin}_forecast.csv", mime='text/csv')
+                    csv = forecast_df.to_csv().encode('utf-8')
+                    st.download_button("Download CSV", data=csv, file_name=f"{selected_coin}_forecast.csv", mime='text/csv')
 
 with col2:
     if st.button("📦 Train All Coins"):
@@ -97,4 +109,3 @@ with col2:
             with st.spinner(f"Training model for {coin}..."):
                 train_and_save(coin)
         st.success("✅ All models trained and saved.")
-
