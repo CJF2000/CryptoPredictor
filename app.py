@@ -28,7 +28,7 @@ forecast_days = 7
 
 @st.cache_data(show_spinner=False)
 def load_data(coin):
-    df = yf.download(coin, period="4y", interval="1d", progress=False)
+    df = yf.download(coin, period="5y", interval="1d", progress=False)
     return df
 
 def train_and_save(coin):
@@ -91,9 +91,9 @@ col1, col2 = st.columns([1, 1])
 with col1:
     if st.button("🔁 Run the Bot"):
         with st.spinner(f"Fetching data and training model for {selected_coin}..."):
-            model, scaler, df = train_and_save(selected_coin)
+            model, scaler, df_full = train_and_save(selected_coin)
             if model is not None:
-                forecasted = forecast(model, scaler, df)
+                forecasted = forecast(model, scaler, df_full)
                 if len(forecasted) > 0:
                     st.subheader("📊 7-Day Forecast")
                     forecast_df = pd.DataFrame(forecasted, columns=["Close", "High", "Low"])
@@ -109,3 +109,4 @@ with col2:
             with st.spinner(f"Training model for {coin}..."):
                 train_and_save(coin)
         st.success("✅ All models trained and saved.")
+
