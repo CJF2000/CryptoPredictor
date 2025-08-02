@@ -1,84 +1,27 @@
+# train_daily.py
+
 import numpy as np
 import pandas as pd
-import streamlit as st
+import yfinance as yf
+import datetime
+import os
 from sklearn.preprocessing import MinMaxScaler
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import Input, LSTM, Dense
-
-def calculate_technical_indicators(df):
-    st.write("Starting row count:", len(df))
-
-    df['Return'] = df['Close'].pct_change()
-    df['Momentum'] = df['Close'] - df['Close'].shift(10)
-    st.write("After Return & Momentum:", len(df.dropna()))
-
-    ema_12 = df['Close'].ewm(span=12, adjust=False).mean()
-    ema_26 = df['Close'].ewm(span=26, adjust=False).mean()
-    df['MACD'] = ema_12 - ema_26
-    df['Signal'] = df['MACD'].ewm(span=9, adjust=False).mean()
-    df['MACD_Hist'] = df['MACD'] - df['Signal']
-    st.write("After MACD:", len(df.dropna()))
-
-    delta = df['Close'].diff()
-    gain = delta.clip(lower=0)
-    loss = -delta.clip(upper=0)
-    avg_gain = gain.rolling(window=14).mean()
-    avg_loss = loss.rolling(window=14).mean()
-    rs = avg_gain / (avg_loss + 1e-10)
-    df['RSI'] = 100 - (100 / (1 + rs))
-    df['RSI_Delta'] = df['RSI'].diff()
-    st.write("After RSI:", len(df.dropna()))
-
-    rsi_min = df['RSI'].rolling(window=14).min()
-    rsi_max = df['RSI'].rolling(window=14).max()
-    df['StochRSI'] = (df['RSI'] - rsi_min) / (rsi_max - rsi_min + 1e-10)
-    st.write("After StochRSI:", len(df.dropna()))
-
-    high14 = df['High'].rolling(14).max()
-    low14 = df['Low'].rolling(14).min()
-    df['Williams_%R'] = -100 * (high14 - df['Close']) / (high14 - low14 + 1e-10)
-    st.write("After Williams %R:", len(df.dropna()))
-
-    sma_20 = df['Close'].rolling(window=20).mean()
-    std_20 = df['Close'].rolling(window=20).std()
-    upper_band = sma_20 + 2 * std_20
-    lower_band = sma_20 - 2 * std_20
-    df['BB%'] = (df['Close'] - lower_band) / (upper_band - lower_band + 1e-10)
-    st.write("After Bollinger Bands:", len(df.dropna()))
-
-    df['H-L'] = df['High'] - df['Low']
-    df['H-PC'] = np.abs(df['High'] - df['Close'].shift(1))
-    df['L-PC'] = np.abs(df['Low'] - df['Close'].shift(1))
-    df['TR'] = df[['H-L', 'H-PC', 'L-PC']].max(axis=1)
-    df['ATR'] = df['TR'].rolling(window=14).mean()
-    st.write("After ATR:", len(df.dropna()))
-
-    df = df.dropna()
-    st.write("Final usable row count:", len(df))
-
-    if len(df) < 50:
-        raise ValueError("Insufficient data after calculating indicators.")
-    return df
-
 
 def calculate_vwap(df):
     return (df['Close'] * df['Volume']).cumsum() / df['Volume'].cumsum()
 
 def prepare_data(df, look_back=30):
     df['VWAP'] = calculate_vwap(df)
-    df = calculate_technical_indicators(df)
-
-    features = ['Close', 'High', 'Low', 'VWAP', 'Return', 'Momentum', 'MACD_Hist', 
-                'RSI_Delta', 'StochRSI', 'Williams_%R', 'BB%', 'ATR']
-    
+    df = df.dropna()
+    features = ['Close', 'High', 'Low', 'VWAP']
     scaler = MinMaxScaler()
     scaled_data = scaler.fit_transform(df[features])
-    
     X, y = [], []
     for i in range(look_back, len(scaled_data)):
         X.append(scaled_data[i - look_back:i])
         y.append(scaled_data[i, :3])
-    
     return np.array(X), np.array(y), scaler, df
 
 def build_model(input_shape):
@@ -88,7 +31,54 @@ def build_model(input_shape):
         LSTM(32),
         Dense(3)
     ])
-    model.compile(optimizer='adam', loss='mse')
+    model.compile(optimizer='adam', loss='mean_squared_error')
     return model
+
+def predict_future(model, recent_input, scaler, steps=7):
+    future_input = recent_input.copy()
+    future_preds_scaled = []
+    for _ in range(steps):
+        input_seq = future_input.reshape(1, 30, 4)
+        pred = model.predict(input_seq, verbose=0)[0]
+        future_preds_scaled.append(pred)
+        dummy_vwap = future_input[-1, 3]
+        next_input = np.append(pred, dummy_vwap).reshape(1, 4)
+        future_input = np.vstack([future_input[1:], next_input])
+    future_preds_scaled = np.array(future_preds_scaled)
+    padded_preds = np.hstack([future_preds_scaled, np.zeros((steps, 1))])
+    return scaler.inverse_transform(padded_preds)[:, :3]
+
+def train_and_save_forecast(coin, forecast_days=7, epochs=150):
+    end_date = datetime.datetime.now()
+    start_date = end_date - datetime.timedelta(days=365)
+    df = yf.download(coin, start=start_date.strftime("%Y-%m-%d"), end=end_date.strftime("%Y-%m-%d"))
+    
+    if df.shape[0] < 100:
+        print(f"Not enough data for {coin}")
+        return
+
+    X, y, scaler, df_full = prepare_data(df)
+    model = build_model((X.shape[1], X.shape[2]))
+    model.fit(X, y, epochs=epochs, batch_size=32, verbose=0)
+
+    recent_scaled = scaler.transform(df_full[['Close', 'High', 'Low', 'VWAP']].iloc[-30:])
+    preds = predict_future(model, recent_scaled, scaler, steps=forecast_days)
+
+    start_date = pd.to_datetime("today").normalize()
+    future_dates = [(start_date + datetime.timedelta(days=i)).strftime('%Y-%m-%d') for i in range(forecast_days)]
+
+    df_pred = pd.DataFrame(preds, columns=['Close', 'High', 'Low'])
+    df_pred.insert(0, 'Date', future_dates)
+
+    output_dir = "daily_forecasts"
+    os.makedirs(output_dir, exist_ok=True)
+    df_pred.to_csv(f"{output_dir}/{coin}_forecast.csv", index=False)
+    print(f"{coin} forecast saved.")
+
+# Run daily for all coins
+if __name__ == "__main__":
+    coins = ['BTC-USD', 'ETH-USD', 'XRP-USD', 'SOL-USD']
+    for coin in coins:
+        train_and_save_forecast(coin)
 
 
