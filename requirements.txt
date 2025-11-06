@@ -1,8 +1,21 @@
-streamlit
-yfinance
-pandas
-numpy
-scikit-learn
-tensorflow-cpu==2.12.0
-ta
-xgboost==1.7.6
+# Core App
+streamlit>=1.38
+altair>=5.3.0
+pandas==2.2.2
+numpy==1.26.4
+requests>=2.32.3
+
+# Machine Learning / Data Prep
+scikit-learn==1.3.2
+tensorflow-cpu==2.15.0
+# or tensorflow==2.15.0 if running locally with GPU
+
+# Time-series / math utilities
+ta==0.10.2       # optional; adds extra indicators if you want
+python-dateutil>=2.9.0.post0
+
+# Optional visualization helpers
+matplotlib>=3.9.2
+
+# Compatibility and performance
+protobuf<5
