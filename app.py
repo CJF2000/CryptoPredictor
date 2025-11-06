@@ -168,39 +168,90 @@ def train_and_forecast_from_df(df_raw: pd.DataFrame, horizon_steps: int):
     return feats.index, preds
 
 # =====================================================
-# Forecast UI
+# Forecast UI (train once/day + confidence metric)
 # =====================================================
 st.subheader("Forecast Settings")
 
 coin = st.selectbox("🪙 Choose Coin", ["BTC", "ETH", "XRP", "SOL", "SUI"])
 days = st.slider("📆 Days to Forecast", 1, 7, 2)
 STEPS = days * BARS_PER_DAY
+path = f"intraday_forecasts/{coin}_15m_forecast.csv"
 
-st.write("---")
+# --- Train only once per day ---
+retrain = st.checkbox("🔁 Force Retrain Today", value=False)
+use_cache = False
+
+if os.path.exists(path):
+    mtime = dt.datetime.fromtimestamp(os.path.getmtime(path))
+    if mtime.date() == dt.datetime.utcnow().date() and not retrain:
+        use_cache = True
 
 if st.button("🔮 Generate Forecast"):
-    with st.spinner(f"Training 15m model for {coin}..."):
+    with st.spinner(f"{'Retraining' if retrain else 'Loading'} {coin} model..."):
         try:
-            exc, sym, _ = try_fetch_sample_15m(coin, lookback_days=30)
-            end = dt.datetime.utcnow()
-            start = end - dt.timedelta(days=365 * 3)
-
-            if exc == "okx":
-                df_full = fetch_okx_klines(sym, start, end, bar=OKX_BAR, limit=100)
-            elif exc == "coinbase":
-                df_full = fetch_coinbase_klines(sym, start, end, granularity=COINBASE_GRANULARITY)
+            if use_cache and not retrain:
+                forecast_df = pd.read_csv(path, parse_dates=["timestamp"])
+                st.success(f"✅ Loaded cached forecast for {coin} (trained {mtime.strftime('%Y-%m-%d %H:%M UTC')})")
             else:
-                df_full = fetch_bitfinex_klines(sym, start, end, timeframe=BITFINEX_TF, limit=10_000)
+                exc, sym, _ = try_fetch_sample_15m(coin, lookback_days=30)
+                end = dt.datetime.utcnow()
+                start = end - dt.timedelta(days=365 * 3)
 
-            if df_full is None or df_full.empty:
-                raise RuntimeError("No data returned from source.")
+                if exc == "okx":
+                    df_full = fetch_okx_klines(sym, start, end, bar=OKX_BAR, limit=100)
+                elif exc == "coinbase":
+                    df_full = fetch_coinbase_klines(sym, start, end, granularity=COINBASE_GRANULARITY)
+                else:
+                    df_full = fetch_bitfinex_klines(sym, start, end, timeframe=BITFINEX_TF, limit=10_000)
 
-            idx_hist, preds = train_and_forecast_from_df(df_full, horizon_steps=STEPS)
-            last_t = idx_hist[-1] + pd.Timedelta(minutes=15)
-            future_idx = pd.date_range(last_t, periods=STEPS, freq="15min", tz="UTC")
-            forecast_df = pd.DataFrame({"timestamp": future_idx, "pred_close": preds})
+                if df_full is None or df_full.empty:
+                    raise RuntimeError("No data returned from source.")
 
-            st.success(f"✅ Forecast complete using {exc.upper()} ({sym})")
+                idx_hist, preds = train_and_forecast_from_df(df_full, horizon_steps=STEPS)
+                last_t = idx_hist[-1] + pd.Timedelta(minutes=15)
+                future_idx = pd.date_range(last_t, periods=STEPS, freq="15min", tz="UTC")
+                forecast_df = pd.DataFrame({"timestamp": future_idx, "pred_close": preds})
+                os.makedirs("intraday_forecasts", exist_ok=True)
+                forecast_df.to_csv(path, index=False)
+                st.success(f"✅ Forecast complete using {exc.upper()} ({sym}) and cached for today")
+
+            # --- Confidence metric ---
+            try:
+                # get last few days of actuals to measure accuracy
+                end_check = dt.datetime.utcnow()
+                start_check = end_check - dt.timedelta(days=3)
+                exc, sym, _ = try_fetch_sample_15m(coin, lookback_days=7)
+                if exc == "okx":
+                    df_actual = fetch_okx_klines(sym, start_check, end_check, bar=OKX_BAR, limit=200)
+                elif exc == "coinbase":
+                    df_actual = fetch_coinbase_klines(sym, start_check, end_check, granularity=COINBASE_GRANULARITY)
+                else:
+                    df_actual = fetch_bitfinex_klines(sym, start_check, end_check, timeframe=BITFINEX_TF, limit=10_000)
+
+                df_actual["start"] = pd.to_datetime(df_actual["start"], utc=True)
+                df_actual = df_actual.rename(columns={"close": "actual"})
+                df_merged = pd.merge_asof(
+                    forecast_df.sort_values("timestamp"),
+                    df_actual.sort_values("start"),
+                    left_on="timestamp",
+                    right_on="start",
+                    direction="nearest",
+                    tolerance=pd.Timedelta(minutes=15),
+                )
+
+                df_merged["diff_pct"] = (
+                    abs(df_merged["pred_close"] - df_merged["actual"]) / df_merged["actual"] * 100
+                )
+                within_1pct = (df_merged["diff_pct"] <= 1).mean() * 100
+                confidence = round(within_1pct, 2)
+            except Exception:
+                confidence = None
+
+            # --- Display Results ---
+            st.metric(
+                label=f"🤖 Model Confidence (past 3 days, ±1%)",
+                value=f"{confidence:.1f}%" if confidence is not None else "N/A",
+            )
             st.line_chart(forecast_df.set_index("timestamp")["pred_close"])
             st.download_button(
                 "📥 Download Forecast CSV",
@@ -217,3 +268,4 @@ st.markdown("""
 ### ⚠️ Disclaimer
 This application is for **educational and informational purposes only**. The forecasts are **experimental outputs** from machine learning models trained on historical data and **do not constitute financial advice**. Markets are volatile; past performance or model predictions are **not indicative of future results**. Use at your own discretion.
 """)
+
