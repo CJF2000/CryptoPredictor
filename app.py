@@ -247,52 +247,73 @@ if st.button("🔮 Generate Forecast"):
                 forecast_df.to_csv(path, index=False)
                 st.success(f"✅ Forecast complete using {exc.upper()} ({sym}) and cached for today")
 
-            # --- Confidence metric ---
-            try:
-                end_check = dt.datetime.utcnow()
-                start_check = end_check - dt.timedelta(days=3)
-                exc, sym, _ = try_fetch_sample_15m(coin, lookback_days=7)
-                if exc == "okx":
-                    df_actual = fetch_okx_klines(sym, start_check, end_check, bar=OKX_BAR, limit=200)
-                elif exc == "coinbase":
-                    df_actual = fetch_coinbase_klines(sym, start_check, end_check, granularity=COINBASE_GRANULARITY)
-                else:
-                    df_actual = fetch_bitfinex_klines(sym, start_check, end_check, timeframe=BITFINEX_TF, limit=10_000)
+           # --- Confidence metric (robust) ---
+try:
+    # Fetch last 3 days of ACTUALS
+    end_check = dt.datetime.utcnow()
+    start_check = end_check - dt.timedelta(days=3)
+    exc_a, sym_a, _ = try_fetch_sample_15m(coin, lookback_days=7)
 
-                df_actual["start"] = pd.to_datetime(df_actual["start"], utc=True)
-                df_actual = df_actual.rename(columns={"close": "actual"})
-                df_merged = pd.merge_asof(
-                    forecast_df.sort_values("timestamp"),
-                    df_actual.sort_values("start"),
-                    left_on="timestamp",
-                    right_on="start",
-                    direction="nearest",
-                    tolerance=pd.Timedelta(minutes=15),
-                )
+    if exc_a == "okx":
+        df_actual = fetch_okx_klines(sym_a, start_check, end_check, bar=OKX_BAR, limit=500)
+    elif exc_a == "coinbase":
+        df_actual = fetch_coinbase_klines(sym_a, start_check, end_check, granularity=COINBASE_GRANULARITY)
+    else:
+        df_actual = fetch_bitfinex_klines(sym_a, start_check, end_check, timeframe=BITFINEX_TF, limit=10000)
 
-                df_merged["diff_pct"] = (
-                    abs(df_merged["pred_close"] - df_merged["actual"]) / df_merged["actual"] * 100
-                )
-                within_1pct = (df_merged["diff_pct"] <= 1).mean() * 100
-                confidence = round(within_1pct, 2)
-            except Exception:
-                confidence = None
+    # Normalize columns defensively
+    def _normalize_actuals(df):
+        if df is None or df.empty:
+            return pd.DataFrame(columns=["start","open","high","low","close","volume"])
+        df = df.copy()
+        df.columns = [c.lower() for c in df.columns]
+        # unify the time column name to 'start'
+        if "start" not in df.columns:
+            if "timestamp" in df.columns:
+                df["start"] = df["timestamp"]
+            elif "time" in df.columns:
+                df["start"] = df["time"]
+            elif df.index.name in ("start","time","timestamp"):
+                df["start"] = df.index
+            else:
+                # create a placeholder to avoid KeyError; will drop rows anyway
+                df["start"] = pd.NaT
+        # ensure datetime tz-aware
+        df["start"] = pd.to_datetime(df["start"], utc=True, errors="coerce")
+        # close column name
+        if "close" not in df.columns and "closing_price" in df.columns:
+            df["close"] = df["closing_price"]
+        df = df.dropna(subset=["start","close"]).sort_values("start")
+        return df[["start","close"]]
 
-            # --- Display Results ---
-            st.metric(
-                label=f"🤖 Model Confidence (past 3 days, ±1%)",
-                value=f"{confidence:.1f}%" if confidence is not None else "N/A",
-            )
-            st.line_chart(forecast_df.set_index("timestamp")["pred_close"])
-            st.download_button(
-                "📥 Download Forecast CSV",
-                forecast_df.to_csv(index=False).encode("utf-8"),
-                file_name=f"{coin}_forecast.csv",
-                mime="text/csv",
-            )
+    df_actual = _normalize_actuals(df_actual).rename(columns={"close":"actual"})
 
-        except Exception as e:
-            st.error(f"Forecast failed: {e}")
+    # If we have no actuals after normalization, skip confidence
+    if df_actual.empty:
+        confidence = None
+    else:
+        # merge_asof needs sorted keys
+        f_sorted = forecast_df.sort_values("timestamp").copy()
+        a_sorted = df_actual.sort_values("start").copy()
+
+        # align predictions to nearest actual 15m bar
+        merged = pd.merge_asof(
+            f_sorted, a_sorted,
+            left_on="timestamp", right_on="start",
+            direction="nearest",
+            tolerance=pd.Timedelta(minutes=15)
+        )
+
+        if "actual" not in merged or merged["actual"].isna().all():
+            confidence = None
+        else:
+            merged = merged.dropna(subset=["actual", "pred_close"])
+            merged["diff_pct"] = (merged["pred_close"] - merged["actual"]).abs() / merged["actual"] * 100.0
+            confidence = round((merged["diff_pct"] <= 1.0).mean() * 100.0, 2)
+
+except Exception as _e:
+    confidence = None
+
 
 st.markdown("---")
 st.markdown("""
