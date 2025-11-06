@@ -1,5 +1,4 @@
 import os
-import time
 import datetime as dt
 import numpy as np
 import pandas as pd
@@ -80,7 +79,7 @@ FEATURES_KEEP = [
 ]
 
 # =====================================================
-# Utility Functions
+# Utilities
 # =====================================================
 def build_symbols(base: str):
     base = base.upper().strip()
@@ -116,6 +115,57 @@ def try_fetch_sample_15m(base_symbol: str, lookback_days: int = 14):
             continue
     raise RuntimeError("No source returned enough 15m data for the chosen coin.")
 
+def ensure_forecast_dir():
+    os.makedirs("intraday_forecasts", exist_ok=True)
+
+def forecast_path(coin: str) -> str:
+    ensure_forecast_dir()
+    return os.path.join("intraday_forecasts", f"{coin.upper()}_15m_forecast.csv")
+
+def normalize_ohlcv(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Ensure columns: start, open, high, low, close, volume (UTC ascending).
+    Handles variants like time/timestamp or index-as-time and o/h/l/c/v names.
+    """
+    if df is None or df.empty:
+        return pd.DataFrame(columns=["start","open","high","low","close","volume"])
+
+    d = df.copy()
+    d.columns = [str(c).lower() for c in d.columns]
+
+    # map short names
+    colmap = {}
+    if "o" in d.columns and "open" not in d.columns: colmap["o"] = "open"
+    if "h" in d.columns and "high" not in d.columns: colmap["h"] = "high"
+    if "l" in d.columns and "low" not in d.columns:  colmap["l"] = "low"
+    if "c" in d.columns and "close" not in d.columns: colmap["c"] = "close"
+    if "v" in d.columns and "volume" not in d.columns: colmap["v"] = "volume"
+    if colmap:
+        d = d.rename(columns=colmap)
+
+    # unify time to 'start'
+    if "start" not in d.columns:
+        if "timestamp" in d.columns:
+            d["start"] = d["timestamp"]
+        elif "time" in d.columns:
+            d["start"] = d["time"]
+        elif d.index.name in ("start","time","timestamp") or str(d.index.dtype).startswith(("datetime64","datetimetz")):
+            d["start"] = d.index
+        else:
+            d["start"] = pd.NaT
+
+    # ensure required columns
+    for req in ["open","high","low","close","volume"]:
+        if req not in d.columns:
+            d[req] = np.nan
+
+    d["start"] = pd.to_datetime(d["start"], utc=True, errors="coerce")
+    for c in ["open","high","low","close","volume"]:
+        d[c] = pd.to_numeric(d[c], errors="coerce")
+
+    d = d.dropna(subset=["start","open","high","low","close","volume"]).sort_values("start")
+    return d[["start","open","high","low","close","volume"]]
+
 def windowize(X, y, look_back=LOOK_BACK):
     Xs, ys = [], []
     for i in range(look_back, len(X)):
@@ -136,9 +186,15 @@ def build_model(input_shape):
 
 def train_and_forecast_from_df(df_raw: pd.DataFrame, horizon_steps: int):
     """Train LSTM on engineered features and produce iterative close forecasts."""
-    df = df_raw.rename(columns=str.lower).set_index("start")
-    feats = build_feature_frame(df)  # from features.py (VWAP, RSI, Fib confluence, Liquidity)
-    feats = feats[FEATURES_KEEP].copy()
+    df_norm = normalize_ohlcv(df_raw)
+    if df_norm.empty:
+        raise RuntimeError("No usable OHLCV after normalization.")
+
+    df = df_norm.rename(columns=str.lower).set_index("start")
+    feats = build_feature_frame(df)  # VWAP, RSI, Fib confluence, Liquidity
+    feats = feats[FEATURES_KEEP].dropna().copy()
+    if len(feats) < LOOK_BACK + 10:
+        raise RuntimeError("Not enough feature rows after engineering.")
 
     scaler = MinMaxScaler()
     X_scaled = scaler.fit_transform(feats)
@@ -146,6 +202,9 @@ def train_and_forecast_from_df(df_raw: pd.DataFrame, horizon_steps: int):
     y_scaled = tgt_scaler.fit_transform(feats[["close"]])
 
     X_seq, y_seq = windowize(X_scaled, y_scaled)
+    if len(X_seq) < LOOK_BACK + 5:
+        raise RuntimeError("Not enough sequences for training.")
+
     v = max(1, int(len(X_seq) * VAL_SPLIT))
     Xtr, ytr, Xv, yv = X_seq[:-v], y_seq[:-v], X_seq[-v:], y_seq[-v:]
 
@@ -169,34 +228,6 @@ def train_and_forecast_from_df(df_raw: pd.DataFrame, horizon_steps: int):
 
     preds = tgt_scaler.inverse_transform(np.array(preds_scaled)).ravel()
     return feats.index, preds
-
-def ensure_forecast_dir():
-    os.makedirs("intraday_forecasts", exist_ok=True)
-
-def forecast_path(coin: str) -> str:
-    ensure_forecast_dir()
-    return os.path.join("intraday_forecasts", f"{coin.upper()}_15m_forecast.csv")
-
-# Robust normalizer for actuals used by confidence metric
-def normalize_actuals(df: pd.DataFrame) -> pd.DataFrame:
-    if df is None or df.empty:
-        return pd.DataFrame(columns=["start", "close"])
-    out = df.copy()
-    out.columns = [c.lower() for c in out.columns]
-    if "start" not in out.columns:
-        if "timestamp" in out.columns:
-            out["start"] = out["timestamp"]
-        elif "time" in out.columns:
-            out["start"] = out["time"]
-        elif out.index.name in ("start", "time", "timestamp"):
-            out["start"] = out.index
-        else:
-            out["start"] = pd.NaT
-    if "close" not in out.columns and "closing_price" in out.columns:
-        out["close"] = out["closing_price"]
-    out["start"] = pd.to_datetime(out["start"], utc=True, errors="coerce")
-    out = out.dropna(subset=["start", "close"]).sort_values("start")
-    return out[["start", "close"]]
 
 # =====================================================
 # Forecast UI (Train All + Per-Coin + Confidence)
@@ -227,8 +258,9 @@ if st.button("🛠 Train All Coins for Today"):
                 else:
                     df_full = fetch_bitfinex_klines(sym, start, end, timeframe=BITFINEX_TF, limit=10_000)
 
-                if df_full is None or df_full.empty:
-                    st.warning(f"⚠️ {base}: No data returned from {exc.upper()}")
+                df_full = normalize_ohlcv(df_full)
+                if df_full.empty:
+                    st.warning(f"⚠️ {base}: No usable data after normalization ({exc.upper()})")
                     continue
 
                 horizon_steps = 7 * BARS_PER_DAY  # default 7D for bulk run
@@ -276,8 +308,9 @@ if st.button("🔮 Generate Forecast"):
                 else:
                     df_full = fetch_bitfinex_klines(sym, start, end, timeframe=BITFINEX_TF, limit=10_000)
 
-                if df_full is None or df_full.empty:
-                    raise RuntimeError("No data returned from source.")
+                df_full = normalize_ohlcv(df_full)
+                if df_full.empty:
+                    raise RuntimeError("No usable data after normalization.")
 
                 idx_hist, preds = train_and_forecast_from_df(df_full, horizon_steps=STEPS)
                 last_t = idx_hist[-1] + pd.Timedelta(minutes=15)
@@ -300,7 +333,8 @@ if st.button("🔮 Generate Forecast"):
                 else:
                     df_actual = fetch_bitfinex_klines(sym_a, start_check, end_check, timeframe=BITFINEX_TF, limit=10_000)
 
-                df_actual = normalize_actuals(df_actual).rename(columns={"close": "actual"})
+                # normalize actuals to guarantee 'start' + 'close'
+                df_actual = normalize_ohlcv(df_actual).rename(columns={"close": "actual"})
 
                 if df_actual.empty:
                     confidence = None
