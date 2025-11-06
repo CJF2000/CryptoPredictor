@@ -91,7 +91,11 @@ if not st.session_state.unlocked:
             unsafe_allow_html=True,
         )
         time.sleep(2)
-        st.experimental_rerun()
+        # Updated rerun call for all Streamlit versions
+        try:
+            st.rerun()
+        except AttributeError:
+            st.experimental_rerun()
     else:
         st.warning("Access Denied.")
         st.stop()
