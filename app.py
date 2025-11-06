@@ -20,92 +20,55 @@ from data_sources import (
 )
 
 # =====================================================
-# Streamlit Config + Theme
+# Streamlit Config
 # =====================================================
-st.set_page_config(page_title="🔮 Crypto Forecast Crystal Ball", layout="centered")
+st.set_page_config(page_title="🔮 Crypto Forecast", layout="centered")
 
-# --- CSS for background, doors, glow effect ---
-st.markdown("""
-<style>
-body {
-    background: radial-gradient(circle at center, #0b0014 0%, #000 100%);
-    color: white;
-}
-h1, h2, h3, h4, h5, h6 {
-    text-align: center;
-    color: #e0d7ff;
-    text-shadow: 0 0 15px #7a47ff;
-}
-.door-container {
-    position: relative;
-    width: 100%;
-    height: 400px;
-    overflow: hidden;
-    background: black;
-}
-.left-door, .right-door {
-    position: absolute;
-    top: 0;
-    width: 50%;
-    height: 100%;
-    background: linear-gradient(145deg, #3c0080, #1a0033);
-    transition: all 2s ease;
-    z-index: 10;
-}
-.left-door { left: 0; border-right: 2px solid #b999ff; }
-.right-door { right: 0; border-left: 2px solid #b999ff; }
-.door-open .left-door { transform: translateX(-100%); }
-.door-open .right-door { transform: translateX(100%); }
-.crystal-container {
-    text-align: center;
-    margin-top: 40px;
-}
-.glow {
-    animation: pulse 2s infinite alternate;
-}
-@keyframes pulse {
-  from { filter: drop-shadow(0 0 10px #8f7fff); }
-  to { filter: drop-shadow(0 0 30px #b999ff); }
-}
-</style>
-""", unsafe_allow_html=True)
+st.markdown(
+    """
+    <style>
+      #MainMenu {visibility: hidden;}
+      footer {visibility: hidden;}
+      header {visibility: hidden;}
+      .stDeployButton {display:none;}
+      body {background-color: #0b0014; color: #e0d7ff;}
+      h1, h2, h3, h4, h5, h6 {text-align: center;}
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 
-CRYSTAL_BALL_GIF = "https://media.giphy.com/media/du3J3cXyzhj75IOgvA/giphy.gif"
+st.title("🔮 Crypto Forecast")
 
 # =====================================================
-# Password Gate (Door Animation)
+# Password Gate
 # =====================================================
 if "unlocked" not in st.session_state:
     st.session_state.unlocked = False
-
-st.title("🔮 Welcome to the Crystal Ball Forecast")
 
 if not st.session_state.unlocked:
     password = st.text_input("Enter Access Password", type="password")
     if password == st.secrets.get("ACCESS_PASSWORD", "Crypto_Forecast777"):
         st.session_state.unlocked = True
-        with st.spinner("✨ The doors are opening..."):
-            time.sleep(2)
-        st.markdown(
-            "<div class='door-container door-open'><div class='left-door'></div><div class='right-door'></div></div>",
-            unsafe_allow_html=True,
-        )
-        time.sleep(2)
-        # Updated rerun call for all Streamlit versions
-        try:
-            st.rerun()
-        except AttributeError:
-            st.experimental_rerun()
+        st.success("✅ Access granted.")
+        st.rerun()
+    elif password:
+        st.warning("Access denied. Incorrect password.")
+        st.stop()
     else:
-        st.warning("Access Denied.")
+        st.info("Please enter your access password to continue.")
         st.stop()
 
 # =====================================================
-# Core Settings (always 15m candles)
+# Config / Constants
 # =====================================================
 TIMEFRAME = "15m"
 BARS_PER_DAY = 96
 LOOK_BACK = 64
+EPOCHS = 50
+BATCH_SIZE = 256
+VAL_SPLIT = 0.1
+np.random.seed(42)
 
 OKX_BAR = "15m"
 COINBASE_GRANULARITY = 900
@@ -116,11 +79,6 @@ FEATURES_KEEP = [
     "vwap","rsi14","fib_conf","fib_nearest_bps",
     "dist_swing_high_bps","dist_swing_low_bps","dist_equal_highs_bps","dist_equal_lows_bps"
 ]
-
-EPOCHS = 50
-BATCH_SIZE = 256
-VAL_SPLIT = 0.1
-np.random.seed(42)
 
 # =====================================================
 # Utility Functions
@@ -180,20 +138,24 @@ def train_and_forecast_from_df(df_raw: pd.DataFrame, horizon_steps: int):
     df = df_raw.rename(columns=str.lower).set_index("start")
     feats = build_feature_frame(df)
     feats = feats[FEATURES_KEEP].copy()
+
     scaler = MinMaxScaler()
     X_scaled = scaler.fit_transform(feats)
     tgt_scaler = MinMaxScaler()
     y_scaled = tgt_scaler.fit_transform(feats[["close"]])
+
     X_seq, y_seq = windowize(X_scaled, y_scaled)
     v = max(1, int(len(X_seq) * VAL_SPLIT))
     Xtr, ytr, Xv, yv = X_seq[:-v], y_seq[:-v], X_seq[-v:], y_seq[-v:]
     model = build_model((X_seq.shape[1], X_seq.shape[2]))
     es = EarlyStopping(monitor="val_loss", patience=8, restore_best_weights=True)
     model.fit(Xtr, ytr, validation_data=(Xv, yv), epochs=EPOCHS, batch_size=BATCH_SIZE, verbose=0, callbacks=[es])
+
     last_window = X_scaled[-LOOK_BACK:].copy()
     preds_scaled = []
     window = last_window
     close_idx = FEATURES_KEEP.index("close")
+
     for _ in range(horizon_steps):
         x = window.reshape(1, *window.shape)
         y_hat = model.predict(x, verbose=0)[0][0]
@@ -201,62 +163,57 @@ def train_and_forecast_from_df(df_raw: pd.DataFrame, horizon_steps: int):
         next_row = window[-1].copy()
         next_row[close_idx] = y_hat
         window = np.vstack([window[1:], next_row])
+
     preds = tgt_scaler.inverse_transform(np.array(preds_scaled)).ravel()
     return feats.index, preds
 
-def cache_path(base_symbol: str, days: int):
-    os.makedirs("intraday_forecasts", exist_ok=True)
-    return os.path.join("intraday_forecasts", f"{base_symbol.upper()}_15m_{days}d.csv")
-
-@st.cache_data(show_spinner=False)
-def load_cached(path: str):
-    if os.path.exists(path):
-        try:
-            return pd.read_csv(path, parse_dates=["timestamp"])
-        except Exception:
-            return None
-    return None
-
 # =====================================================
-# Crystal Ball Interface
+# Forecast UI
 # =====================================================
-st.markdown(
-    f"<div class='crystal-container'><img src='{CRYSTAL_BALL_GIF}' width='300' class='glow'></div>",
-    unsafe_allow_html=True,
-)
-st.markdown("<h2>Peer into the crystal ball...</h2>", unsafe_allow_html=True)
+st.subheader("Forecast Settings")
 
-coin = st.selectbox("🪙 Choose Your Coin", ["BTC", "ETH", "XRP", "SOL", "SUI"])
+coin = st.selectbox("🪙 Choose Coin", ["BTC", "ETH", "XRP", "SOL", "SUI"])
 days = st.slider("📆 Days to Forecast", 1, 7, 2)
 STEPS = days * BARS_PER_DAY
 
-if st.button("🔮 Reveal the Future"):
-    with st.spinner(f"Consulting the spirits for {coin}..."):
+st.write("---")
+
+if st.button("🔮 Generate Forecast"):
+    with st.spinner(f"Training 15m model for {coin}..."):
         try:
-            exc, sym, sample = try_fetch_sample_15m(coin, lookback_days=30)
+            exc, sym, _ = try_fetch_sample_15m(coin, lookback_days=30)
             end = dt.datetime.utcnow()
-            start = end - dt.timedelta(days=365*3)
+            start = end - dt.timedelta(days=365 * 3)
+
             if exc == "okx":
                 df_full = fetch_okx_klines(sym, start, end, bar=OKX_BAR, limit=100)
             elif exc == "coinbase":
                 df_full = fetch_coinbase_klines(sym, start, end, granularity=COINBASE_GRANULARITY)
             else:
                 df_full = fetch_bitfinex_klines(sym, start, end, timeframe=BITFINEX_TF, limit=10_000)
+
             if df_full is None or df_full.empty:
-                raise RuntimeError("Selected source returned no data.")
+                raise RuntimeError("No data returned from source.")
+
             idx_hist, preds = train_and_forecast_from_df(df_full, horizon_steps=STEPS)
             last_t = idx_hist[-1] + pd.Timedelta(minutes=15)
             future_idx = pd.date_range(last_t, periods=STEPS, freq="15min", tz="UTC")
             forecast_df = pd.DataFrame({"timestamp": future_idx, "pred_close": preds})
-            st.success("✨ The vision is clear!")
-            st.balloons()
-            st.markdown(f"<h3 style='text-align:center;'>📈 {coin}-USD Forecast for Next {days} Days</h3>", unsafe_allow_html=True)
+
+            st.success(f"✅ Forecast complete using {exc.upper()} ({sym})")
             st.line_chart(forecast_df.set_index("timestamp")["pred_close"])
+            st.download_button(
+                "📥 Download Forecast CSV",
+                forecast_df.to_csv(index=False).encode("utf-8"),
+                file_name=f"{coin}_forecast.csv",
+                mime="text/csv",
+            )
+
         except Exception as e:
-            st.error(f"Training failed: {e}")
+            st.error(f"Forecast failed: {e}")
 
 st.markdown("---")
 st.markdown("""
 ### ⚠️ Disclaimer
-This app is for **educational and informational purposes only**. The forecasts are **experimental** outputs of machine learning models trained on historical data and **do not constitute financial advice**. Markets are volatile; past performance or predictions are **not guarantees of future results**. Use responsibly.
+This application is for **educational and informational purposes only**. The forecasts are **experimental outputs** from machine learning models trained on historical data and **do not constitute financial advice**. Markets are volatile; past performance or model predictions are **not indicative of future results**. Use at your own discretion.
 """)
