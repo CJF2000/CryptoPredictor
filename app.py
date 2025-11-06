@@ -168,30 +168,62 @@ def train_and_forecast_from_df(df_raw: pd.DataFrame, horizon_steps: int):
     return feats.index, preds
 
 # =====================================================
-# Forecast UI (train once/day + confidence metric)
+# Forecast UI (Train Once/Day + Confidence Metric)
 # =====================================================
-st.subheader("Forecast Settings")
+st.subheader("Forecast Dashboard")
+
+# 🛠 Train All Coins Button
+if st.button("🛠 Train All Coins for Today"):
+    with st.spinner("Training all coins (BTC, ETH, XRP, SOL, SUI)... this may take several minutes."):
+        try:
+            os.makedirs("intraday_forecasts", exist_ok=True)
+            for c in ["BTC", "ETH", "XRP", "SOL", "SUI"]:
+                exc, sym, _ = try_fetch_sample_15m(c, lookback_days=30)
+                end = dt.datetime.utcnow()
+                start = end - dt.timedelta(days=365 * 3)
+
+                if exc == "okx":
+                    df_full = fetch_okx_klines(sym, start, end, bar=OKX_BAR, limit=100)
+                elif exc == "coinbase":
+                    df_full = fetch_coinbase_klines(sym, start, end, granularity=COINBASE_GRANULARITY)
+                else:
+                    df_full = fetch_bitfinex_klines(sym, start, end, timeframe=BITFINEX_TF, limit=10_000)
+
+                if df_full is None or df_full.empty:
+                    st.warning(f"⚠️ {c}: No data returned from {exc.upper()}")
+                    continue
+
+                idx_hist, preds = train_and_forecast_from_df(df_full, horizon_steps=7 * BARS_PER_DAY)
+                last_t = idx_hist[-1] + pd.Timedelta(minutes=15)
+                future_idx = pd.date_range(last_t, periods=7 * BARS_PER_DAY, freq="15min", tz="UTC")
+                forecast_df = pd.DataFrame({"timestamp": future_idx, "pred_close": preds})
+                forecast_df.to_csv(f"intraday_forecasts/{c}_15m_forecast.csv", index=False)
+                st.success(f"✅ {c} trained successfully using {exc.upper()} ({sym})")
+            st.success("🎯 All forecasts updated for today!")
+        except Exception as e:
+            st.error(f"Training failed: {e}")
+
+st.write("---")
+st.subheader("Generate Individual Forecast")
 
 coin = st.selectbox("🪙 Choose Coin", ["BTC", "ETH", "XRP", "SOL", "SUI"])
 days = st.slider("📆 Days to Forecast", 1, 7, 2)
 STEPS = days * BARS_PER_DAY
 path = f"intraday_forecasts/{coin}_15m_forecast.csv"
 
-# --- Train only once per day ---
-retrain = st.checkbox("🔁 Force Retrain Today", value=False)
+# --- Train once per day per coin ---
 use_cache = False
-
 if os.path.exists(path):
     mtime = dt.datetime.fromtimestamp(os.path.getmtime(path))
-    if mtime.date() == dt.datetime.utcnow().date() and not retrain:
+    if mtime.date() == dt.datetime.utcnow().date():
         use_cache = True
 
 if st.button("🔮 Generate Forecast"):
-    with st.spinner(f"{'Retraining' if retrain else 'Loading'} {coin} model..."):
+    with st.spinner(f"{'Loading' if use_cache else 'Training'} model for {coin}..."):
         try:
-            if use_cache and not retrain:
+            if use_cache:
                 forecast_df = pd.read_csv(path, parse_dates=["timestamp"])
-                st.success(f"✅ Loaded cached forecast for {coin} (trained {mtime.strftime('%Y-%m-%d %H:%M UTC')})")
+                st.success(f"✅ Loaded cached forecast for {coin} (trained {mtime.strftime('%Y-%m-%d')})")
             else:
                 exc, sym, _ = try_fetch_sample_15m(coin, lookback_days=30)
                 end = dt.datetime.utcnow()
@@ -217,7 +249,6 @@ if st.button("🔮 Generate Forecast"):
 
             # --- Confidence metric ---
             try:
-                # get last few days of actuals to measure accuracy
                 end_check = dt.datetime.utcnow()
                 start_check = end_check - dt.timedelta(days=3)
                 exc, sym, _ = try_fetch_sample_15m(coin, lookback_days=7)
