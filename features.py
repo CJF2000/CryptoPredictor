@@ -2,6 +2,7 @@
 import numpy as np
 import pandas as pd
 
+# Helper: RSI (classic Wilder's, 14 default)
 def rsi(series: pd.Series, period: int = 14) -> pd.Series:
     delta = series.diff()
     up = delta.clip(lower=0)
@@ -11,141 +12,92 @@ def rsi(series: pd.Series, period: int = 14) -> pd.Series:
     rs = roll_up / (roll_down.replace(0, np.nan))
     return 100 - (100 / (1 + rs))
 
-def session_vwap(df: pd.DataFrame) -> pd.Series:
-    """
-    VWAP that resets at each UTC calendar day (session).
-    Typical price = (H+L+C)/3.
-    """
-    tp = (df["high"] + df["low"] + df["close"]) / 3.0
-    grp = df["start"].dt.floor("D")
-    cum_pv = (tp * df["volume"]).groupby(grp).cumsum()
-    cum_v  = (df["volume"]).groupby(grp).cumsum().replace(0, np.nan)
-    return cum_pv / cum_v
+# Helper: session/cumulative VWAP
+def vwap_df(df: pd.DataFrame) -> pd.Series:
+    # assume df has 'close' and 'volume'
+    pv = (df['close'] * df['volume']).cumsum()
+    vol = df['volume'].cumsum().replace(0, np.nan)
+    return pv / vol
 
-def swings(df: pd.DataFrame, lb: int = 10):
-    """
-    Simple swing high/low detection using rolling window extrema.
-    Returns two Series of booleans for swing highs/lows.
-    """
-    high = df["high"]; low = df["low"]
-    sh = (high.shift(1) == high.shift(1).rolling(lb, center=False).max()) & \
-         (high.shift(1) > high.shift(2)) & (high.shift(1) > high)
-    sl = (low.shift(1) == low.shift(1).rolling(lb, center=False).min()) & \
-         (low.shift(1) < low.shift(2)) & (low.shift(1) < low)
-    return sh.fillna(False), sl.fillna(False)
+# Helper: recent swing high/low and fib levels
+def swing_levels(high: pd.Series, low: pd.Series, lookback: int = 96*7):
+    # last N bars swing
+    hh = high.rolling(lookback, min_periods=lookback//4).max()
+    ll = low.rolling(lookback, min_periods=lookback//4).min()
+    sw_high = hh
+    sw_low = ll
+    # fibs between last swing
+    levels = [0.236, 0.382, 0.5, 0.618, 0.786]
+    # compute per-row fib grid using current swing hi/lo
+    rng = (sw_high - sw_low).replace(0, np.nan)
+    fib_grid = {f"fib_{int(l*1000)}": (sw_high - rng * l) for l in levels}
+    return sw_high, sw_low, fib_grid
 
-def fib_levels_from_swing(high_val, low_val):
-    """Return common retracement/extension levels for a swing."""
-    diff = high_val - low_val
-    levels = [
-        low_val + 0.236*diff, low_val + 0.382*diff, low_val + 0.5*diff,
-        low_val + 0.618*diff, low_val + 0.786*diff,
-        high_val - 0.236*diff, high_val - 0.382*diff, high_val - 0.618*diff
-    ]
-    return np.array(sorted(set(levels)))
+# Helper: basis points distance
+def bps_dist(a: pd.Series, b: pd.Series) -> pd.Series:
+    return (a - b).abs() / b.replace(0, np.nan) * 10000
 
-def fib_confluence_score(df: pd.DataFrame, windows=(20, 50, 120), tol_bps=8):
-    """
-    For each bar, compute a confluence score: how many fib levels (from multiple swing windows)
-    lie within 'tol_bps' (basis points) of current close.
-    """
-    close = df["close"].values
-    high  = df["high"].values
-    low   = df["low"].values
-    scores = np.zeros(len(df))
-    nearest_dist = np.full(len(df), np.nan)
-
-    for i in range(max(windows)+2, len(df)):
-        levels = []
-        for w in windows:
-            h = high[i-w:i].max()
-            l = low[i-w:i].min()
-            levels.extend(fib_levels_from_swing(h, l))
-        levels = np.array(levels)
-        price = close[i]
-        if levels.size == 0:
-            continue
-        # distance in bps
-        dists_bps = 1e4 * np.abs(levels - price) / price
-        conf_hits = (dists_bps <= tol_bps).sum()
-        scores[i] = conf_hits
-        nearest_dist[i] = dists_bps.min()
-    return pd.Series(scores, index=df.index, name="fib_conf"), pd.Series(nearest_dist, index=df.index, name="fib_nearest_bps")
-
-def equal_level_pools(prices: pd.Series, tol_bps=5, min_hits=3, lookback=200):
-    """
-    Detect 'equal highs/lows' liquidity pools in the recent window: cluster prices within tolerance.
-    Returns two arrays of pool levels (sell-side highs, buy-side lows).
-    """
-    arr = prices.to_numpy()[-lookback:]
-    levels = []
-    for p in arr:
-        levels.append(p)
-    levels = np.array(levels)
-    # cluster by rounding to tolerance bucket
-    buckets = np.round(levels / (levels * tol_bps / 1e4))
-    # count occurrences
-    counts = pd.Series(buckets).value_counts()
-    buckets_keep = counts[counts >= min_hits].index
-    kept = levels[np.isin(buckets, buckets_keep)]
-    above = np.unique(np.round(kept[kept >= prices.iloc[-1]], 2))
-    below = np.unique(np.round(kept[kept <= prices.iloc[-1]], 2))
-    return above, below
-
-def liquidity_features(df: pd.DataFrame, tol_bps=5, min_hits=3, lookback=300):
-    """
-    Proxy 'liquidity' features:
-      - distance (bps) to nearest 'equal-highs' pool above (sell-side liquidity)
-      - distance (bps) to nearest 'equal-lows' pool below (buy-side liquidity)
-      - distance (bps) to recent swing high/low
-    """
-    close = df["close"]
-    sh, sl = swings(df, lb=10)
-    # recent swings
-    last_sh = df["high"][sh].rolling(1).apply(lambda x: x[-1] if len(x) else np.nan).ffill()
-    last_sl = df["low"][sl].rolling(1).apply(lambda x: x[-1] if len(x) else np.nan).ffill()
-
-    d_sh_bps = 1e4 * (last_sh - close).abs() / close
-    d_sl_bps = 1e4 * (close - last_sl).abs() / close
-
-    # equal-level pools
-    above, below = equal_level_pools(close, tol_bps=tol_bps, min_hits=min_hits, lookback=lookback)
-    def nearest_bps(levels, price):
-        if levels is None or len(levels) == 0:
-            return np.nan
-        return float((1e4 * np.min(np.abs(levels - price) / price)))
-
-    d_sell_bps = []
-    d_buy_bps = []
-    for p in close:
-        d_sell_bps.append(nearest_bps(above, p))
-        d_buy_bps.append(nearest_bps(below, p))
-
-    return (
-        pd.Series(d_sh_bps, index=df.index, name="dist_swing_high_bps"),
-        pd.Series(d_sl_bps, index=df.index, name="dist_swing_low_bps"),
-        pd.Series(d_sell_bps, index=df.index, name="dist_equal_highs_bps"),
-        pd.Series(d_buy_bps, index=df.index, name="dist_equal_lows_bps"),
-    )
+# Helper: equal highs/lows detection (simple)
+def equal_level(series: pd.Series, window: int = 48, tol_bps: float = 5.0) -> pd.Series:
+    # find recent price that repeats (approx) within window; return that ref price
+    ref = series.round(2)  # coarse bucket
+    eq = ref.rolling(window).apply(lambda x: pd.Series(x).mode().iloc[0] if len(pd.Series(x).mode()) else np.nan, raw=False)
+    # validate by tolerance
+    price = series
+    valid = (bps_dist(price, eq) <= tol_bps)
+    return eq.where(valid)
 
 def build_feature_frame(df: pd.DataFrame) -> pd.DataFrame:
-    f = pd.DataFrame(index=df.index)
-    f["close"] = df["close"].astype(float)
-    f["high"] = df["high"].astype(float)
-    f["low"] = df["low"].astype(float)
-    f["volume"] = df["volume"].astype(float)
+    """
+    Input df indexed by UTC datetime with columns:
+      close, high, low, volume
+    Returns a feature frame including:
+      vwap, rsi14, fib_conf, fib_nearest_bps,
+      dist_swing_high_bps, dist_swing_low_bps,
+      dist_equal_highs_bps, dist_equal_lows_bps
+    """
+    x = df.copy()
 
-    f["vwap"] = session_vwap(df)
-    f["rsi14"] = rsi(f["close"], 14)
-    fib_conf, fib_near = fib_confluence_score(df)
-    f["fib_conf"] = fib_conf
-    f["fib_nearest_bps"] = fib_near
-    d_sh, d_sl, d_eqh, d_eql = liquidity_features(df)
-    f["dist_swing_high_bps"] = d_sh
-    f["dist_swing_low_bps"] = d_sl
-    f["dist_equal_highs_bps"] = d_eqh
-    f["dist_equal_lows_bps"] = d_eql
+    # Core indicators
+    x["vwap"] = vwap_df(x)
+    x["rsi14"] = rsi(x["close"], 14)
 
-    # Fill/clean
-    f = f.replace([np.inf, -np.inf], np.nan).dropna()
-    return f
+    # Swing highs/lows & fib grid
+    sw_high, sw_low, fib_grid = swing_levels(x["high"], x["low"], lookback=96*7)  # ~7 days on 15m
+    x["swing_high"] = sw_high
+    x["swing_low"] = sw_low
+
+    # Distance to swing extremes (bps)
+    x["dist_swing_high_bps"] = bps_dist(x["close"], x["swing_high"])
+    x["dist_swing_low_bps"]  = bps_dist(x["close"], x["swing_low"])
+
+    # Fib confluence: count of fib levels within 10 bps of price
+    fib_cols = []
+    for k, lvl in fib_grid.items():
+        col = f"{k}"
+        x[col] = lvl
+        fib_cols.append(col)
+
+    # nearest fib (bps) and confluence score (#levels within threshold)
+    diffs = [bps_dist(x["close"], x[c]) for c in fib_cols]
+    diffs_df = pd.concat(diffs, axis=1)
+    diffs_df.columns = fib_cols
+
+    x["fib_nearest_bps"] = diffs_df.min(axis=1)
+    x["fib_conf"] = (diffs_df.le(10.0)).sum(axis=1).astype(float)  # within 10 bps → counts as confluence
+
+    # Liquidity: "equal highs/lows" rough proxies
+    # Build reference levels from highs/lows separately (using close for distance)
+    eq_high_ref = equal_level(x["high"], window=96, tol_bps=8.0)
+    eq_low_ref  = equal_level(x["low"],  window=96, tol_bps=8.0)
+    x["dist_equal_highs_bps"] = bps_dist(x["close"], eq_high_ref)
+    x["dist_equal_lows_bps"]  = bps_dist(x["close"], eq_low_ref)
+
+    # Keep only required columns + original OHLCV for safety
+    keep = [
+        "close","high","low","volume",
+        "vwap","rsi14","fib_conf","fib_nearest_bps",
+        "dist_swing_high_bps","dist_swing_low_bps","dist_equal_highs_bps","dist_equal_lows_bps",
+    ]
+    out = x[keep].replace([np.inf, -np.inf], np.nan).dropna()
+    return out
